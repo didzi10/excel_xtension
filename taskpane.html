@@ -1134,6 +1134,7 @@ const platOfUrl=(s)=>{
   if(/(^|\.)linkedin\.com$|^lnkd\.in$/.test(h0))return 'linkedin';
   if(/(^|\.)strava\.com$|^strava\.app\.link$/.test(h0))return 'strava';
   if(/(^|\.)twitch\.tv$/.test(h0))return 'twitch';
+  if(/(^|\.)kolsquare\.com$/.test(h0))return 'kolsquare';
   return 'inconnue';
 };
 const cut19=(id)=>id.length>19?id.slice(-19):id;
@@ -1148,7 +1149,10 @@ const ID_RULES={
     m=s.match(/\/permalink\/(\d+)/i);if(m)return m[1];
     m=s.match(/\/photos\/[^\/?#]+\/(\d+)/i);if(m)return m[1];
     return null;}},
-  instagram:{note:'code court après /p/, /reel/ ou /tv/',fn:(s)=>{const m=s.match(/instagram\.com\/(?:[^\/?#]+\/)?(?:p|reel|reels|tv)\/([A-Za-z0-9_-]+)/i);return m?m[1]:null;}},
+  instagram:{note:'code court après /p/, /reel/ ou /tv/ · story : identifiant numérique après /stories/compte/',fn:(s)=>{
+    let m=s.match(/instagram\.com\/stories\/[^\/?#]+\/(\d+)/i);if(m)return m[1];
+    m=s.match(/instagram\.com\/(?:[^\/?#]+\/)?(?:p|reel|reels|tv)\/([A-Za-z0-9_-]+)/i);return m?m[1]:null;}},
+  kolsquare:{note:'story : identifiant numérique du nom de fichier (…/ID.jpg)',fn:(s)=>{const m=s.match(/\/(\d{10,})\.(?:jpe?g|png|webp|gif|mp4)(?:[?#]|$)/i);return m?m[1]:null;}},
   twitter:{note:'identifiant numérique après /status/ (19 derniers caractères)',fn:(s)=>{
     let m=s.match(/\/status(?:es)?\/(\d+)/i);if(m)return cut19(m[1]);
     const t=bare(s).replace(/\//g,'');const l=t.slice(-19);return /^\d{19}$/.test(l)?l:null;}},
