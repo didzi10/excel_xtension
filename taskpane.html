@@ -373,10 +373,17 @@ function aExtra(wb,res){
 
   // récapitulatif et tops : mêmes colonnes de marque (filtrables dans le volet)
   if(PC!==-1){
-    const INDC=g('impression_indiquées','impression_indiquees','impression indiquées'),DETC=g('detection textuelle ?','detection textuelle','détection textuelle ?');
-    const cand=[];
-    if(INDC!==-1&&DETC!==-1&&DETC>INDC){for(let c=INDC+1;c<DETC;c++){const hh=m['_h'+c];if(hh)cand.push({c,name:hh});}}
-    else{for(let c=m._mnC;c<=m._mxC;c++){const hh=m['_h'+c];if(hh)cand.push({c,name:hh});}}
+    // colonnes de marque : entre « impression… » et la colonne « commentaires » (ou « detection textuelle »), puis toutes les autres colonnes
+    const headers=[];for(let c=m._mnC;c<=m._mxC;c++){const hh=m['_h'+c];if(hh)headers.push({c,name:hh,low:hh.toLowerCase().trim()});}
+    const starts=headers.filter(x=>/^impression/.test(x.low));
+    let detected=[];
+    if(starts.length){
+      const st=starts.find(x=>x.low.replace('é','e')==='impression_indiquees'||x.low==='impression indiquées')||starts[starts.length-1];
+      const en=headers.find(x=>x.c>st.c&&/^(commentaires?|comments?|d[eé]tection textuelle)/.test(x.low));
+      if(en)detected=headers.filter(x=>x.c>st.c&&x.c<en.c);
+    }
+    const detSet=new Set(detected.map(x=>x.c));
+    const cand=detected.concat(headers.filter(x=>!detSet.has(x.c)));
     const isOn=(cell)=>{if(!cell||cell.v===undefined||cell.v===null||cell.v==='')return false;if(typeof cell.v==='number')return cell.v!==0;const s=String(cell.v).trim().toLowerCase();return !['','0','false','faux','non','no','-'].includes(s);};
     const EQC=g('équivalent média','equivalent media'),DEPC=g('dépenses paid','depenses paid');
     const tN=wb.SheetNames.find(n=>n.toLowerCase()==='tableaux');const b2=tN?cs(wb.Sheets[tN]['B2']):null;
@@ -402,9 +409,9 @@ function aExtra(wb,res){
       const cc=cats.map(k=>{const cell=r.d[k.c];if(!cell||cell.v===undefined||cell.v===null||cell.v==='')return -1;const key=cell.t==='n'?String(cell.v):String(cell.v).trim();const i=k.map.get(key);return i===undefined?-1:i;});
       items.push({er:r.er,p,o,vis,eng,eq:EQC!==-1?(cn(r.d[EQC])||0):0,dep:DEPC!==-1?(cn(r.d[DEPC])||0):0,d,mk:mkOf(d),acc:CC!==-1?cs(r.d[CC]):null,c:cc,url:UC!==-1?cs(r.d[UC]):null,idp:IDPC!==-1?cs(r.d[IDPC]):null,b:bb});
     }
-    const brandCols=cand.map(k=>k.name);
-    res.push({sec:'RECAP',id:'recap',st:'i',lb:'Récapitulatif',msg:'',recap:Object.values(mp),brandCols,hasVis:VISC!==-1,rows:[]});
-    res.push({sec:'TOPS',id:'tops',st:'i',lb:'Tops',msg:'',items,brandCols,hasSOA:SOAC!==-1,hasVis:VISC!==-1,hasEq:EQC!==-1,hasDep:DEPC!==-1,hasDate:DC!==-1,cats:cats.map(k=>({name:k.name,values:k.values})),b2,rows:[]});
+    const brandCols=cand.map(k=>k.name),brandDetected=detected.map(x=>x.name);
+    res.push({sec:'RECAP',id:'recap',st:'i',lb:'Récapitulatif',msg:'',recap:Object.values(mp),brandCols,brandDetected,hasVis:VISC!==-1,rows:[]});
+    res.push({sec:'TOPS',id:'tops',st:'i',lb:'Tops',msg:'',items,brandCols,brandDetected,hasSOA:SOAC!==-1,hasVis:VISC!==-1,hasEq:EQC!==-1,hasDep:DEPC!==-1,hasDate:DC!==-1,cats:cats.map(k=>({name:k.name,values:k.values})),b2,rows:[]});
   }
 }
 
@@ -603,6 +610,35 @@ const FIXES={
   c40:{label:'Supprimer les espaces',desc:"Retire les espaces en début et fin de cellule (plateforme, owned/paid/earned, compte, scope, IDs, URL). Les valeurs purement numériques sont ignorées.",run:fixTrim}
 };
 
+/* Export : crée une NOUVELLE feuille (jamais d'écrasement) avec les tableaux de l'onglet Analyse */
+async function exportSheetTables(blocks){
+  return Excel.run(async ctx=>{
+    const wss=ctx.workbook.worksheets;wss.load('items/name');await ctx.sync();
+    const names=new Set(wss.items.map(w=>w.name.toLowerCase()));
+    let nm='Synthèse Analyse',k=2;while(names.has(nm.toLowerCase()))nm='Synthèse Analyse '+(k++);
+    const ws=wss.add(nm);
+    const safe=(v)=>(v===null||v===undefined||(typeof v==='number'&&!isFinite(v)))?'':(typeof v==='string'&&/^[=+\-@]/.test(v)?"'"+v:v);
+    const NF={i:'# ##0',p:'0.0" %"',q:'0.00" %"',c:'0.00',f:'0.0'};
+    let r=0;
+    for(const b of blocks){
+      const t=ws.getRangeByIndexes(r,0,1,1);t.values=[[safe(b.title)]];t.format.font.bold=true;t.format.font.size=12;r++;
+      if(b.lines){for(const l of b.lines){ws.getRangeByIndexes(r,0,1,1).values=[[safe(l)]];r++;}r++;continue;}
+      const nc=b.heads.length,hr=ws.getRangeByIndexes(r,0,1,nc);hr.values=[b.heads.map(safe)];hr.format.font.bold=true;hr.format.fill.color='#E2E8F0';r++;
+      b.rows.forEach((row,ri)=>{
+        ws.getRangeByIndexes(r,0,1,nc).values=[row.map(safe)];
+        row.forEach((v,j)=>{const f=b.byRow?(j===0?'s':b.fmts[ri]):b.fmts[j];if(NF[f]&&typeof v==='number')ws.getRangeByIndexes(r,j,1,1).numberFormat=[[NF[f]]];});
+        r++;
+      });
+      if(b.note){ws.getRangeByIndexes(r,0,1,1).values=[[safe(b.note)]];r++;}
+      r++;
+    }
+    ws.getRange('A:A').format.columnWidth=190;
+    ws.getRange('B:L').format.columnWidth=95;
+    ws.activate();await ctx.sync();
+    return nm;
+  });
+}
+
 /* ═════════ Onglet Analyse ═════════ */
 const serialToDate=(s)=>new Date(Math.round((s-25569)*86400000));
 const isoToSerial=(iso)=>{if(!iso)return null;const a=iso.split('-').map(Number);return Date.UTC(a[0],a[1]-1,a[2])/86400000+25569;};
@@ -707,6 +743,10 @@ function AnalyseTab(p){
   const [db1,setDb1]=useState('');
   const [db2,setDb2]=useState('');
   const [metric,setMetric]=useState('vis');
+  const [openT,setOpenT]=useState(new Set());
+  const [dim,setDim]=useState('p');
+  const [gmet,setGmet]=useState('vis');
+  const [stack,setStack]=useState(false);
   const inited=useRef(false);
   useEffect(()=>{
     if(!tops||inited.current)return;inited.current=true;
@@ -738,13 +778,14 @@ function AnalyseTab(p){
   const cV=conc(rowsA,'vis'),cE=conc(rowsA,'eng');
   const insights=buildInsights(A,B,labA,labB,rowsA,tops.hasDep,monthSeries(rowsA,'vis'));
 
+  const flipT=(k)=>setOpenT(prev=>{const s=new Set(prev);s.has(k)?s.delete(k):s.add(k);return s;});
   const box={background:'#fff',border:'1px solid #e2e8f0',borderRadius:10,padding:'.65rem .75rem',marginBottom:10};
   const ttl=(t)=>h('div',{style:{fontWeight:800,fontSize:'.86rem',marginBottom:6}},t);
-  const sel=(value,onChange,opts,w)=>h('select',{value,onChange:e=>onChange(e.target.value),style:{fontSize:'.74rem',padding:'2px 4px',borderRadius:6,border:'1px solid #cbd5e1',maxWidth:w||150}},opts);
+  const sel=(value,onChange,options)=>h(Picker,{value,onChange,options});
   const row=(label,children)=>h('div',{style:{display:'flex',alignItems:'center',gap:6,flexWrap:'wrap',marginBottom:5,fontSize:'.75rem'}},h('span',{style:{width:92,color:'#64748b'}},label),children);
-  const valOpts=(none)=>[h('option',{key:'_',value:''},none)].concat(cat?sortVals(cat.values).map(v=>h('option',{key:v,value:v},v)):[]);
+  const valOpts=(none)=>[{value:'',label:none}].concat(cat?sortVals(cat.values).map(v=>({value:v,label:v})):[]);
   const mainNames=['scope','semestre','année','annee','mois','plateforme','owned/paid/earned','compte ou requête','compte ou requete'];
-  const colOpts=[h('optgroup',{key:'m',label:'Colonnes principales'},tops.cats.filter(c=>mainNames.indexOf(c.name.toLowerCase())>=0).map(c=>h('option',{key:c.name,value:c.name},c.name))),h('optgroup',{key:'o',label:'Autres colonnes'},tops.cats.filter(c=>mainNames.indexOf(c.name.toLowerCase())<0).map(c=>h('option',{key:c.name,value:c.name},c.name)))];
+  const colOpts=tops.cats.filter(c=>mainNames.indexOf(c.name.toLowerCase())>=0).map(c=>({value:c.name,label:c.name,group:'Colonnes principales'})).concat(tops.cats.filter(c=>mainNames.indexOf(c.name.toLowerCase())<0).map(c=>({value:c.name,label:c.name,group:'Autres colonnes'})));
   const modeBtn=(k,l)=>h('button',{onClick:()=>setMode(k),style:{padding:'3px 9px',fontSize:'.74rem',fontWeight:700,cursor:'pointer',border:'1px solid '+(mode===k?'#2563eb':'#cbd5e1'),background:mode===k?'#2563eb':'#fff',color:mode===k?'#fff':'#334155',borderRadius:6}},l);
 
   const kpi=(label,a,b,fmt,kind)=>h('div',{key:label,style:{background:'#fff',border:'1px solid #e2e8f0',borderRadius:8,padding:'6px 8px'}},
@@ -758,11 +799,11 @@ function AnalyseTab(p){
     const th={padding:'3px 5px',textAlign:'right',color:'#64748b',borderBottom:'1px solid #e2e8f0',fontWeight:600},td={padding:'3px 5px',textAlign:'right',borderBottom:'1px solid #f1f5f9'};
     return h('div',{style:{overflowX:'auto',marginBottom:8}},h('div',{style:{fontWeight:700,fontSize:'.76rem',marginBottom:3}},title),
       h('table',{style:{width:'100%',borderCollapse:'collapse',fontSize:'.72rem'}},
-        h('thead',null,h('tr',null,h('th',{style:{...th,textAlign:'left'}},''),h('th',{style:th},'Posts'),h('th',{style:th},'Visibilité'),h('th',{style:th},'Part'),hasB?h('th',{style:th},'Δ part'):null,hasB?h('th',{style:th},'Δ vis.'):null)),
+        h('thead',null,h('tr',null,h('th',{style:{...th,textAlign:'left'}},''),h('th',{style:th},'Posts'),h('th',{style:th},'Visibilité'),h('th',{style:th},'Taux eng.'),h('th',{style:th},'Part'),hasB?h('th',{style:th},'Δ part'):null,hasB?h('th',{style:th},'Δ vis.'):null)),
         h('tbody',null,keys.map(k=>{
           const a=mapA[k]||{n:0,vis:0},b=mapB?(mapB[k]||{n:0,vis:0}):null;
           const sh=A.vis?a.vis/A.vis*100:0,shB=(B&&B.vis)?b.vis/B.vis*100:null;
-          return h('tr',{key:k},h('td',{style:{...td,textAlign:'left',fontWeight:700}},k),h('td',{style:td},fI(a.n)),h('td',{style:td},fI(a.vis)),h('td',{style:td},fP(sh,0)+' %'),
+          return h('tr',{key:k},h('td',{style:{...td,textAlign:'left',fontWeight:700}},k),h('td',{style:td},fI(a.n)),h('td',{style:td},fI(a.vis)),h('td',{style:td},a.vis?fP((a.eng||0)/a.vis*100,2)+' %':'—'),h('td',{style:td},fP(sh,0)+' %'),
             hasB?h('td',{style:td},shB===null?'—':h(Delta,{a:sh,b:shB,kind:'pts'})):null,
             hasB?h('td',{style:td},h(Delta,{a:a.vis,b:b.vis})):null);
         }))));
@@ -772,21 +813,36 @@ function AnalyseTab(p){
       h('div',null,'1er post : '+fP(c.s1,0)+' % · 5 premiers : '+fP(c.s5,0)+' % · 10 premiers : '+fP(c.s10,0)+' %'),
       h('div',null,'La moitié du total vient de '+c.k50+' post'+(c.k50>1?'s':'')+' ('+fP(c.k50pct,0)+' % des posts concernés).')):null;
 
+  const allA=selA?(selA.type==='col'?(selA.code<0?[]:tops.items.filter(x=>x.c[ci]===selA.code)):tops.items.filter(x=>x.d!==null&&(selA.from===null||x.d>=selA.from)&&(selA.to===null||x.d<selA.to+1))):tops.items;
+  const allB=selB?(selB.type==='col'?(selB.code<0?[]:tops.items.filter(x=>x.c[ci]===selB.code)):tops.items.filter(x=>x.d!==null&&(selB.from===null||x.d>=selB.from)&&(selB.to===null||x.d<selB.to+1))):null;
+  const tKp=tKpi(A,B,labA,labB,tops),tPl=tSplit('Par plateforme',A.byP,B&&B.byP,A,B),tTy=tSplit('Par type (owned / paid / earned)',A.byO,B&&B.byO,A,B);
+  const tG=tGap(rowsA,rowsB,tops.brandDetected,dim,gmet),tBr=tBrands(allA,allB,tops.brandDetected);
+  const tMu=mode==='col'?tMulti(base,cat,ci,tops.hasDep,sortVals):null;
+  const tPd=tops.hasDep?tPaid(rowsA,rowsB):null,tRy=tRhythm(rowsA),tAc=tAccounts(base,rowsA),tBk=tBreaks(base,metric);
+  const doExport=async()=>{
+    try{
+      const blocks=[{title:'Analyse — '+labA+(hasB?' vs '+labB:'')+(on?' — marque : '+brand:''),lines:insights},tKp,tPl,tTy,tG,tBr,tMu,tPd,tRy,tAc,tBk].filter(Boolean);
+      const nm=await exportSheetTables(blocks);onToast('Feuille « '+nm+' » créée avec les tableaux de l\'analyse.');
+    }catch(e){onToast('Export impossible : '+(e&&e.message?e.message:e));}
+  };
+  const dimOpts=[{value:'p',label:'Plateforme'},{value:'o',label:'Type (owned/paid/earned)'}].concat(tops.brandDetected.length?[{value:'b',label:'Marque'}]:[]);
   return h('div',null,
     h('div',{style:box},ttl('📅 Périodes à analyser'),
       h('div',{style:{display:'flex',gap:6,marginBottom:8}},modeBtn('col','Par colonne'),modeBtn('date','Par dates')),
       mode==='col'?h('div',null,
-          row('Colonne',sel(col,(v)=>{setCol(v);setVa('');setVb('');},colOpts,170)),
-          row('Période',sel(va,setVa,valOpts('Toute la base'),170)),
-          row('Comparer à',sel(vb,setVb,valOpts('Aucune comparaison'),170)))
+          row('Colonne',sel(col,(v)=>{setCol(v);setVa('');setVb('');},colOpts)),
+          row('Période',sel(va,setVa,valOpts('Toute la base'))),
+          row('Comparer à',sel(vb,setVb,valOpts('Aucune comparaison'))))
         :h('div',null,
           !tops.hasDate?h('div',{style:{color:'#b91c1c',fontSize:'.75rem'}},'Colonne « Date » introuvable.'):null,
           row('Période',h('span',null,h('input',{type:'date',value:da1,onChange:e=>setDa1(e.target.value),style:{fontSize:'.73rem'}}),' → ',h('input',{type:'date',value:da2,onChange:e=>setDa2(e.target.value),style:{fontSize:'.73rem'}}))),
           row('Comparer à',h('span',null,h('input',{type:'date',value:db1,onChange:e=>setDb1(e.target.value),style:{fontSize:'.73rem'}}),' → ',h('input',{type:'date',value:db2,onChange:e=>setDb2(e.target.value),style:{fontSize:'.73rem'}})))),
-      h(BrandSelect,{cols:tops.brandCols,value:brand,onChange:onBrand}),
+      h(BrandSelect,{cols:tops.brandCols,detected:tops.brandDetected,value:brand,onChange:onBrand}),
       on?h('div',{style:{background:'#fef2f2',border:'1px solid #fca5a5',color:'#b91c1c',borderRadius:6,padding:'4px 8px',fontSize:'.74rem',fontWeight:700,marginTop:4}},'⚠️ Analyse filtrée sur la marque « '+brand+' »'):null,
       h('div',{style:{fontSize:'.72rem',color:'#64748b',marginTop:6}},'Période affichée : ',h('strong',null,labA),hasB?[' · comparée à ',h('strong',{key:'b'},labB)]:' · sans comparaison',' — '+fI(A.n)+' posts'+(hasB?' / '+fI(B.n):''))),
 
+    h('div',{style:{display:'flex',gap:8,alignItems:'flex-start',marginBottom:0}},h(Reliab,{rows:rowsA}),
+      h('button',{style:{...BTN_B,marginBottom:10,whiteSpace:'nowrap'},onClick:doExport,title:'Crée une nouvelle feuille avec tous les tableaux de cet onglet'},'📤 Exporter')),
     h('div',{style:{...box,background:'#eff6ff',borderColor:'#bfdbfe'}},
       h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center'}},ttl('💡 Points à retenir'),h('button',{style:BTN_N,onClick:()=>copyText(insights.map(s=>'• '+s).join('\n'),(ok)=>onToast(ok?'Points à retenir copiés.':'Copie impossible depuis ce volet.'))},'📋 Copier')),
       h('ul',{style:{margin:0,paddingLeft:'1.1rem',fontSize:'.78rem',lineHeight:1.6,color:'#1e293b'}},insights.map((s,i)=>h('li',{key:i},s))),
@@ -803,10 +859,17 @@ function AnalyseTab(p){
       splitTable('Par plateforme',A.byP,B&&B.byP),
       splitTable('Par type (owned / paid / earned)',A.byO,B&&B.byO)),
 
+    tG?h('div',{style:box},ttl('🔎 Ce qui explique l\'écart'),
+      row('Regrouper par',sel(dim,setDim,dimOpts)),row('Indicateur',sel(gmet,setGmet,[{value:'vis',label:'Visibilité'},{value:'eng',label:'Engagement'}])),
+      h(Tbl,{t:tG,hideTitle:true,onToast})):null,
+    tBr?h('div',{style:box},ttl('🏷️ Part de voix par marque'),
+      h('div',{style:{fontSize:'.72rem',color:'#64748b',marginBottom:6}},'Calculé sur toutes les marques de la période (le filtre « marque » ci-dessus ne s\'applique pas ici).'),h(Tbl,{t:tBr,hideTitle:true,onToast})):null,
+    tMu?h('div',{style:box},ttl('🗓️ Toutes les valeurs côte à côte'),h(Tbl,{t:tMu,hideTitle:true,onToast})):null,
     h('div',{style:box},ttl('📈 Évolution mensuelle'),
       h('div',{style:{display:'flex',gap:6,alignItems:'center',marginBottom:6,fontSize:'.75rem'}},h('span',{style:{color:'#64748b'}},'Indicateur :'),
-        sel(metric,setMetric,[h('option',{key:'vis',value:'vis'},'Visibilité'),h('option',{key:'eng',value:'eng'},'Engagement'),h('option',{key:'n',value:'n'},'Nombre de posts')].concat(tops.hasEq?[h('option',{key:'eq',value:'eq'},'Équivalent média')]:[]))),
-      h(MonthChart,{series,aSet,bSet,metric}),
+        sel(metric,setMetric,[{value:'vis',label:'Visibilité'},{value:'eng',label:'Engagement'},{value:'n',label:'Nombre de posts'}].concat(tops.hasEq?[{value:'eq',label:'Équivalent média'}]:[]))),
+      h('label',{style:{fontSize:'.73rem',color:'#475569',display:'block',marginBottom:4}},h('input',{type:'checkbox',checked:stack,onChange:e=>setStack(e.target.checked)}),' Empiler par plateforme'),
+      stack?h(MonthStack,{rows:base,metric}):h(MonthChart,{series,aSet,bSet,metric}),
       h('div',{style:{display:'flex',gap:10,fontSize:'.68rem',color:'#64748b',marginTop:4,flexWrap:'wrap'}},
         selA?h('span',null,h('span',{style:{color:PCOL.a}},'■'),' période affichée'):null,hasB?h('span',null,h('span',{style:{color:PCOL.b}},'■'),' comparaison'):null,h('span',null,h('span',{style:{color:PCOL.o}},'■'),' autres mois')),
       notes.length?h('div',{style:{marginTop:8,fontSize:'.76rem'}},
@@ -827,7 +890,184 @@ function AnalyseTab(p){
           h('td',{style:{padding:'3px 5px',borderBottom:'1px solid #f1f5f9'}},h('a',{className:'rl','data-sec':'DATA','data-row':a.x.er},'ligne '+a.x.er)),
           h('td',{style:{padding:'3px 5px',borderBottom:'1px solid #f1f5f9'}},a.x.p),
           h('td',{style:{padding:'3px 5px',borderBottom:'1px solid #f1f5f9',textAlign:'right',fontWeight:700}},fI(a.v)),
-          h('td',{style:{padding:'3px 5px',borderBottom:'1px solid #f1f5f9',textAlign:'right',color:'#64748b'}},fP(a.v/cV.tot*100,0)+' %')))))):h('div',{style:{color:'#64748b',fontSize:'.76rem'}},'Aucune visibilité sur cette période.')));
+          h('td',{style:{padding:'3px 5px',borderBottom:'1px solid #f1f5f9',textAlign:'right',color:'#64748b'}},fP(a.v/cV.tot*100,0)+' %')))))):h('div',{style:{color:'#64748b',fontSize:'.76rem'}},'Aucune visibilité sur cette période.')),
+
+    tPd?h('div',{style:box},ttl('💶 Efficacité du paid'),h(Tbl,{t:tPd,hideTitle:true,onToast})):null,
+    (tRy||tAc||tBk)?h('div',{style:box},ttl('🕒 Rythme, comptes et ruptures'),
+      h(Tbl,{t:tRy,onToast}),
+      h(Tbl,{t:tAc,onToast}),
+      tAc&&tAc.inactive?h('div',{style:{fontSize:'.72rem',color:'#b45309',marginBottom:8}},'⚠️ '+tAc.inactive+' compte'+(tAc.inactive>1?'s':'')+' sans publication depuis plus de 60 jours avant le dernier post de la base.'):null,
+      h(Tbl,{t:tBk,onToast})):null,
+    h('div',{style:box},ttl('📋 Récapitulatif'),
+      h('div',{style:{fontSize:'.72rem',color:'#64748b',marginBottom:6}},'Sur la période affichée ('+labA+')'+(on?' — filtré sur « '+brand+' »':'')+'.'),
+      h(RecapRows,{rows:rowsA,hasVis:tops.hasVis})),
+
+    h(Group,{title:'🏆 Top '+TOPN+' par visibilité'+(on?' — FILTRÉ : '+brand:''),accent:on?'#dc2626':null,count:Object.keys(topsBy(rowsA,false,-1)).length,open:openT.has('v'),onToggle:()=>flipT('v')},
+      h('div',{style:{background:'#fff',borderRadius:8,padding:8,overflowX:'auto'}},
+        h('div',{style:{fontSize:'.72rem',color:'#64748b',marginBottom:6}},'Sur la période affichée ('+labA+').'),
+        h(TopTable,{items:rowsA,isEng:false,bi:-1,hasSOA:tops.hasSOA}))),
+    h(Group,{title:'🔥 Top '+TOPN+' par engagement'+(on?' — FILTRÉ : '+brand:''),accent:on?'#dc2626':null,count:Object.keys(topsBy(rowsA,true,-1)).length,open:openT.has('e'),onToggle:()=>flipT('e')},
+      h('div',{style:{background:'#fff',borderRadius:8,padding:8,overflowX:'auto'}},
+        h('div',{style:{fontSize:'.72rem',color:'#64748b',marginBottom:6}},'Sur la période affichée ('+labA+'). Social Actions si disponible, sinon likes + commentaires (hors websites et stories).'),
+        h(TopTable,{items:rowsA,isEng:true,bi:-1,hasSOA:tops.hasSOA}))));
+}
+/* ═════════ Analyse : tableaux supplémentaires (calculs purs) ═════════ */
+const dTxt=(a,b)=>{const pc=pctVar(a,b);return pc===null?'—':(pc>=0?'▲ ':'▼ ')+fP(Math.abs(pc))+' %';};
+const dPt=(a,b)=>{const d=a-b;return (d>=0?'▲ ':'▼ ')+fP(Math.abs(d),1)+' pt';};
+const fmtCell=(c,v)=>(v===null||v===undefined||v===''||(typeof v==='number'&&!isFinite(v)))?'—':c==='i'?fI(v):c==='p'?fP(v,1)+' %':c==='q'?fP(v,2)+' %':c==='c'?fP(v,2):c==='f'?fP(v,1):String(v);
+const fmtOf=(t,ri,j)=>t.byRow?(j===0?'s':t.fmts[ri]):t.fmts[j];
+const tsv=(t)=>[t.heads].concat(t.rows.map((r,ri)=>r.map((v,j)=>fmtCell(fmtOf(t,ri,j),v)))).map(r=>r.join('\t')).join('\n');
+const grpBy=(rows,kf)=>{const m={};for(const x of rows){for(const k of kf(x)){const g=m[k]||(m[k]={n:0,vis:0,eng:0,eq:0,dep:0});g.n++;g.vis+=x.vis||0;g.eng+=x.eng||0;g.eq+=x.eq||0;g.dep+=x.dep||0;}}return m;};
+const dateFr=(s)=>serialToDate(s).toLocaleDateString('fr-FR',{timeZone:'UTC'});
+
+function tSplit(title,mapA,mapB,A,B){
+  const keys=[...new Set([...Object.keys(mapA),...(mapB?Object.keys(mapB):[])])].sort((a,b)=>((mapA[b]||{vis:0}).vis)-((mapA[a]||{vis:0}).vis));
+  const heads=['',  'Posts','Visibilité','Taux eng.','Part'].concat(mapB?['Δ part','Δ visibilité']:[]);
+  const rows=keys.map(k=>{
+    const a=mapA[k]||{n:0,vis:0,eng:0},b=mapB?(mapB[k]||{n:0,vis:0,eng:0}):null;
+    const sh=A.vis?a.vis/A.vis*100:0,shB=(B&&B.vis)?b.vis/B.vis*100:null;
+    return [k,a.n,a.vis,a.vis?(a.eng||0)/a.vis*100:null,sh].concat(b?[shB===null?'—':dPt(sh,shB),dTxt(a.vis,b.vis)]:[]);
+  });
+  return {title,heads,fmts:['s','i','i','q','p','s','s'],rows};
+}
+function tKpi(A,B,labA,labB,tops){
+  const rate=(x)=>x.vis>0?x.eng/x.vis*100:null;
+  const heads=['Indicateur',labA].concat(B?[labB,'Évolution']:[]);
+  const rows=[['Posts','i',A.n,B&&B.n],['Visibilité','i',A.vis,B&&B.vis],['Engagement','i',A.eng,B&&B.eng],["Taux d'engagement",'q',rate(A),B&&rate(B)]];
+  if(tops.hasEq)rows.push(['Équivalent média','i',A.eq,B&&B.eq]);
+  if(tops.hasDep)rows.push(['Dépenses paid','i',A.dep,B&&B.dep]);
+  return {title:'Indicateurs clés',heads,byRow:true,fmts:rows.map(r=>r[1]),inv:[],
+    rows:rows.map(r=>[r[0],r[2]].concat(B?[r[3],r[1]==='q'?(r[2]!==null&&r[3]!==null?dPt(r[2],r[3]):'—'):dTxt(r[2],r[3])]:[]))};
+}
+function tGap(rowsA,rowsB,brandCols,dim,met){
+  if(!rowsB)return null;
+  const kf=dim==='p'?(x)=>[x.p]:dim==='o'?(x)=>[x.o]:(x)=>x.b.filter(i=>i<brandCols.length).map(i=>brandCols[i]);
+  const ga=grpBy(rowsA,kf),gb=grpBy(rowsB,kf);
+  const keys=[...new Set([...Object.keys(ga),...Object.keys(gb)])];
+  const L=keys.map(k=>{const a=(ga[k]||{})[met]||0,b=(gb[k]||{})[met]||0;return {k,a,b,d:a-b};});
+  const tot=L.reduce((s,x)=>s+Math.abs(x.d),0);
+  if(!L.length||!tot)return null;
+  L.sort((x,y)=>Math.abs(y.d)-Math.abs(x.d));
+  return {title:'Contribution à l\'écart',heads:[dim==='p'?'Plateforme':dim==='o'?'Type':'Marque','Période','Comparaison','Écart','Évolution','Poids dans l\'écart'],
+    fmts:['s','i','i','i','s','p'],rows:L.map(x=>[x.k,x.a,x.b,x.d,dTxt(x.a,x.b),x.d===0?0:Math.abs(x.d)/tot*100]),
+    note:dim==='b'?'Un post peut citer plusieurs marques : il compte alors pour chacune.':null};
+}
+function tBrands(allA,allB,brandCols){
+  if(!brandCols.length)return null;
+  const per=(rows)=>brandCols.map((nm,i)=>{const r=rows.filter(x=>x.b.includes(i));return {nm,a:agg(r)};}).filter(o=>o.a.n>0);
+  const pa=per(allA);if(!pa.length)return null;
+  const pb=allB?per(allB):null;
+  const totA=pa.reduce((s,o)=>s+o.a.vis,0),totB=pb?pb.reduce((s,o)=>s+o.a.vis,0):0;
+  pa.sort((x,y)=>y.a.vis-x.a.vis);
+  const plats=Object.entries(agg(allA).byP).sort((a,b)=>b[1].vis-a[1].vis).slice(0,4).map(e=>e[0]);
+  const heads=['Marque','Posts','Visibilité','Part de voix'].concat(pb?['Δ part']:[]).concat(['Taux eng.']).concat(plats.map(p=>'% '+p));
+  const fm=['s','i','i','p'].concat(pb?['s']:[]).concat(['q']).concat(plats.map(()=>'p'));
+  const rows=pa.slice(0,15).map(o=>{
+    const sh=totA?o.a.vis/totA*100:0;let sB=null;
+    if(pb){const q=pb.find(z=>z.nm===o.nm);sB=(q&&totB)?q.a.vis/totB*100:0;}
+    return [o.nm,o.a.n,o.a.vis,sh].concat(pb?[dPt(sh,sB)]:[]).concat([o.a.vis?o.a.eng/o.a.vis*100:null]).concat(plats.map(p=>o.a.vis?((o.a.byP[p]||{vis:0}).vis)/o.a.vis*100:null));
+  });
+  return {title:'Part de voix par marque',heads,fmts:fm,rows,note:'Part de voix = visibilité de la marque ÷ somme des visibilités de toutes les marques (un post citant plusieurs marques compte pour chacune). Les colonnes « % plateforme » donnent la répartition de la visibilité de chaque marque.'+(pa.length>15?' 15 premières marques affichées.':'')};
+}
+function tMulti(base,cat,ci,hasDep,sortVals){
+  if(!cat||cat.values.length<2||cat.values.length>14)return null;
+  const vals=sortVals(cat.values);
+  const ag=vals.map(v=>agg(base.filter(x=>x.c[ci]===cat.values.indexOf(v))));
+  const rows=[['Posts','i',ag.map(a=>a.n)],['Visibilité','i',ag.map(a=>a.vis)],['Engagement','i',ag.map(a=>a.eng)],["Taux d'engagement",'q',ag.map(a=>a.vis?a.eng/a.vis*100:null)]];
+  if(hasDep)rows.push(['Dépenses paid','i',ag.map(a=>a.dep)]);
+  return {title:'Toutes les valeurs de « '+cat.name+' »',heads:['Indicateur'].concat(vals.map(String)),byRow:true,fmts:rows.map(r=>r[1]),rows:rows.map(r=>[r[0]].concat(r[2]))};
+}
+function tPaid(rowsA,rowsB){
+  const f=(r)=>r.filter(x=>x.o==='paid'&&x.dep>0);
+  const a=f(rowsA);if(!a.length)return null;
+  const b=rowsB?f(rowsB):null;
+  const ga=grpBy(a,x=>[x.p]),gb=b?grpBy(b,x=>[x.p]):{};
+  const c1=(g)=>g&&g.vis?g.dep/g.vis*1000:null,c2=(g)=>g&&g.eng?g.dep/g.eng:null;
+  const dl=(x,y)=>(b&&x!==null&&y!==null)?dTxt(x,y):(b?'—':null);
+  const mk=(k,g,h2)=>{const r=[k,g.n,g.dep,c1(g)];if(b)r.push(dl(c1(g),c1(h2)));r.push(c2(g));if(b)r.push(dl(c2(g),c2(h2)));return r;};
+  const keys=Object.keys(ga).sort((x,y)=>ga[y].dep-ga[x].dep);
+  const sum=(o)=>Object.values(o).reduce((s,g)=>({n:s.n+g.n,vis:s.vis+g.vis,eng:s.eng+g.eng,dep:s.dep+g.dep}),{n:0,vis:0,eng:0,dep:0});
+  const rows=keys.map(k=>mk(k,ga[k],gb[k])).concat([mk('Total',sum(ga),sum(gb))]);
+  const heads=['Plateforme','Posts paid','Dépenses','Coût / 1000 vis.'].concat(b?['Δ']:[]).concat(['Coût / engagement']).concat(b?['Δ']:[]);
+  const fm=['s','i','i','c'].concat(b?['s']:[]).concat(['c']).concat(b?['s']:[]);
+  const inv=b?[4,6]:[];
+  return {title:'Efficacité du paid',heads,fmts:fm,rows,inv,note:'Uniquement les posts paid avec une dépense renseignée. Un coût en baisse (▼) est favorable.'};
+}
+function tRhythm(rowsA){
+  const dated=rowsA.filter(x=>x.d!==null);if(!dated.length)return null;
+  const by={};for(const x of dated)(by[x.p]||(by[x.p]=[])).push(x);
+  const rows=Object.entries(by).sort((a,b)=>b[1].length-a[1].length).map(([p,L])=>{
+    const days=[...new Set(L.map(x=>Math.floor(x.d)))].sort((a,b)=>a-b);let gap=0;
+    for(let i=1;i<days.length;i++)gap=Math.max(gap,days[i]-days[i-1]);
+    const months=new Set(L.map(x=>x.mk)).size;
+    return [p,L.length,months,L.length/months,gap,dateFr(days[days.length-1])];
+  });
+  return {title:'Rythme de publication',heads:['Plateforme','Posts datés','Mois actifs','Posts / mois','Plus long silence (j)','Dernier post'],fmts:['s','i','i','f','i','s'],rows};
+}
+function tAccounts(base,rowsA){
+  const dated=base.filter(x=>x.d!==null);const maxD=dated.length?Math.max(...dated.map(x=>x.d)):null;
+  const by={};for(const x of rowsA){if(!x.acc)continue;const k=x.p+' · '+x.acc;const g=by[k]||(by[k]={n:0,vis:0,eng:0,last:null,acc:x.acc});g.n++;g.vis+=x.vis||0;g.eng+=x.eng||0;if(x.d!==null&&(g.last===null||x.d>g.last))g.last=x.d;}
+  const ks=Object.keys(by);if(!ks.length)return null;
+  ks.sort((a,b)=>by[b].vis-by[a].vis);
+  const rows=ks.slice(0,30).map(k=>{const g=by[k];return [k,g.n,g.vis,g.vis?g.eng/g.vis*100:null,g.last===null?'—':dateFr(g.last),(maxD!==null&&g.last!==null&&g.last<maxD-60)?'inactif (> 60 j)':''];});
+  return {title:'Classement des comptes',heads:['Compte','Posts','Visibilité','Taux eng.','Dernier post','Statut'],fmts:['s','i','i','q','s','s'],rows,note:ks.length>30?'30 premiers comptes sur '+ks.length+'.':null,
+    inactive:ks.filter(k=>by[k].last!==null&&maxD!==null&&by[k].last<maxD-60).length};
+}
+function tBreaks(base,metric){
+  const ser=monthSeries(base,metric==='n'?'n':metric);if(ser.length<3)return null;
+  const s=ser.map(x=>x.v).sort((a,b)=>a-b),med=s.length%2?s[(s.length-1)/2]:(s[s.length/2-1]+s[s.length/2])/2;
+  const J=[];for(let i=1;i<ser.length;i++){const pv=ser[i-1].v,cu=ser[i].v;if(pv>0&&pv>=0.2*med){const ch=(cu-pv)/pv*100;if(Math.abs(ch)>=50)J.push({mk:ser[i].mk,pm:ser[i-1].mk,cu,pv,ch});}}
+  if(!J.length)return null;
+  J.sort((a,b)=>Math.abs(b.ch)-Math.abs(a.ch));
+  return {title:'Ruptures mois sur mois (±50 % ou plus)',heads:['Mois','Valeur','Mois précédent','Valeur préc.','Variation'],fmts:['s','i','s','i','s'],
+    rows:J.slice(0,6).map(j=>[mkLabel(j.mk),j.cu,mkLabel(j.pm),j.pv,(j.ch>=0?'▲ ':'▼ ')+fP(Math.abs(j.ch),0)+' %'])};
+}
+
+function Tbl(p){
+  const t=p.t;if(!t)return null;
+  const th={padding:'3px 5px',textAlign:'right',color:'#64748b',borderBottom:'1px solid #e2e8f0',fontWeight:600,whiteSpace:'nowrap'},td={padding:'3px 5px',textAlign:'right',borderBottom:'1px solid #f1f5f9',whiteSpace:'nowrap'};
+  const inv=t.inv||[];
+  return h('div',{style:{marginBottom:8}},
+    h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:3}},
+      h('div',{style:{fontWeight:700,fontSize:'.76rem'}},p.hideTitle?'':t.title),
+      h('button',{style:BTN_N,onClick:()=>copyText(tsv(t),(ok)=>p.onToast(ok?'Tableau copié (collable dans Excel).':'Copie impossible.'))},'Copier')),
+    h('div',{style:{overflowX:'auto'}},h('table',{style:{width:'100%',borderCollapse:'collapse',fontSize:'.72rem'}},
+      h('thead',null,h('tr',null,t.heads.map((x,j)=>h('th',{key:j,style:{...th,textAlign:j===0?'left':'right'}},x)))),
+      h('tbody',null,t.rows.map((r,ri)=>h('tr',{key:ri},r.map((v,j)=>{
+        const s=fmtCell(fmtOf(t,ri,j),v);let col='#1e293b';
+        if(s.charAt(0)==='▲')col=inv.indexOf(j)>=0?'#b91c1c':'#15803d';else if(s.charAt(0)==='▼')col=inv.indexOf(j)>=0?'#15803d':'#b91c1c';
+        return h('td',{key:j,style:{...td,textAlign:j===0?'left':'right',fontWeight:j===0?700:400,color:col}},s);
+      })))))),
+    t.note?h('div',{style:{fontSize:'.68rem',color:'#64748b',marginTop:3}},t.note):null);
+}
+
+const SC=['#2563eb','#0891b2','#16a34a','#d97706','#9333ea','#94a3b8'];
+function MonthStack(p){
+  const {rows,metric}=p;
+  const tot={};for(const x of rows){if(!x.mk)continue;tot[x.p]=(tot[x.p]||0)+metricVal(x,metric);}
+  const pl=Object.keys(tot).sort((a,b)=>tot[b]-tot[a]),top=pl.slice(0,5);
+  const m={};for(const x of rows){if(!x.mk)continue;const k=top.indexOf(x.p)>=0?x.p:'Autres';const o=m[x.mk]||(m[x.mk]={});o[k]=(o[k]||0)+metricVal(x,metric);}
+  const mks=Object.keys(m).sort();if(!mks.length)return h('div',{style:{color:'#64748b',fontSize:'.76rem'}},'Aucune date exploitable pour tracer une évolution.');
+  const names=top.concat(pl.length>5?['Autres']:[]);
+  const W=320,H=140,pL=6,pr=6,pt=14,pb=26,n=mks.length,sum=(mk)=>Object.values(m[mk]).reduce((a,b)=>a+b,0),mx=Math.max(...mks.map(sum))||1,bw=(W-pL-pr)/n,step=Math.ceil(n/8);
+  const els=[];
+  mks.forEach((mk,i)=>{
+    let y=H-pb;const x=pL+i*bw;
+    names.forEach((nm,k)=>{const v=m[mk][nm]||0;if(!v)return;const bh=(H-pt-pb)*v/mx;y-=bh;els.push(h('rect',{key:'r'+i+'_'+k,x:x+1,y,width:Math.max(1,bw-2),height:Math.max(0,bh),fill:SC[k]},h('title',null,mkLabel(mk)+' · '+nm+' : '+fI(v))));});
+    if(i%step===0)els.push(h('text',{key:'t'+i,x:x+bw/2,y:H-pb+11,fontSize:8,textAnchor:'middle',fill:'#64748b'},mkLabel(mk)));
+  });
+  els.push(h('text',{key:'mx',x:pL,y:9,fontSize:8,fill:'#64748b'},'max '+fI(mx)));
+  return h('div',null,h('svg',{viewBox:'0 0 '+W+' '+H,width:'100%',style:{display:'block'}},els),
+    h('div',{style:{display:'flex',gap:8,flexWrap:'wrap',fontSize:'.68rem',color:'#64748b',marginTop:4}},names.map((nm,k)=>h('span',{key:nm},h('span',{style:{color:SC[k]}},'■'),' '+nm))));
+}
+function Reliab(p){
+  const r=p.rows,n=r.length;if(!n)return null;
+  const pc=(f)=>r.filter(f).length/n*100;
+  const d=pc(x=>x.d!==null),v=pc(x=>x.vis>0),e=pc(x=>x.eng>0);
+  const warn=d<95||v<80;
+  const nd=r.filter(x=>x.d===null).length;
+  return h('div',{style:{background:warn?'#fffbeb':'#f8fafc',border:'1px solid '+(warn?'#fde68a':'#e2e8f0'),borderRadius:8,padding:'5px 8px',fontSize:'.72rem',color:warn?'#92400e':'#64748b',marginBottom:10,flex:1}},
+    (warn?'⚠️ ':'')+'Fiabilité de la période : '+fP(d,0)+' % des posts ont une date, '+fP(v,0)+' % une visibilité, '+fP(e,0)+' % un engagement (> 0).'+(nd?' '+nd+' post'+(nd>1?'s':'')+' sans date : absents des graphiques mensuels.':''));
 }
 
 /* ═════════ Interface ═════════ */
@@ -841,7 +1081,28 @@ const LV={
 const btn=(bg,col,bd)=>({padding:'4px 9px',background:bg,color:col,border:'1px solid '+bd,borderRadius:6,fontSize:'.74rem',fontWeight:700,cursor:'pointer'});
 const BTN_N=btn('#f1f5f9','#334155','#cbd5e1'),BTN_B=btn('#2563eb','#fff','#2563eb'),BTN_F=btn('#fff7ed','#c2410c','#fdba74');
 
-const linkify=(html,sec,id)=>{
+/* Sécurité : les messages embarquent des valeurs de cellules ; on ne garde que des balises de mise en forme, sans attribut dangereux */
+const OK_TAGS={B:1,STRONG:1,I:1,EM:1,BR:1,SPAN:1,DIV:1,P:1,UL:1,OL:1,LI:1,TABLE:1,THEAD:1,TBODY:1,TR:1,TD:1,TH:1,CODE:1,SMALL:1,SUB:1,SUP:1,U:1,S:1};
+const esc=(t)=>String(t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+const safeStyle=(v)=>/url\s*\(|expression|@import|javascript:|position\s*:\s*(fixed|absolute)/i.test(v)?'':v;
+function sanitize(html){
+  let doc;try{doc=new DOMParser().parseFromString('<body>'+String(html==null?'':html)+'</body>','text/html');}catch(e){return esc(html);}
+  const walk=(node)=>{let o='';
+    node.childNodes.forEach(n=>{
+      if(n.nodeType===3){o+=esc(n.nodeValue);return;}
+      if(n.nodeType!==1)return;
+      const t=n.tagName;
+      if(!OK_TAGS[t]){o+=walk(n);return;} /* balise inconnue (script, img, iframe, a…) : on garde le texte seulement */
+      let at='';const st=n.getAttribute('style');
+      if(st){const c=safeStyle(st);if(c)at=' style="'+c.replace(/"/g,'&quot;')+'"';}
+      if(t==='TD'||t==='TH'){const cs=parseInt(n.getAttribute('colspan'),10);if(cs>0&&cs<20)at+=' colspan="'+cs+'"';}
+      o+=t==='BR'?'<br>':'<'+t.toLowerCase()+at+'>'+walk(n)+'</'+t.toLowerCase()+'>';
+    });return o;};
+  return walk(doc.body);
+}
+const safeUrl=(u)=>{try{const x=new URL(String(u).trim());return(x.protocol==='https:'||x.protocol==='http:')?x.href:null;}catch(e){return null;}};
+const linkify=(html0,sec,id)=>{
+  const html=sanitize(html0);
   let out=html.replace(/([Ll]ignes?\s*(?::\s*)?)((?:\d+(?:,\s*)?)+)/g,(m,a,b)=>a+b.split(/,\s*/).filter(Boolean).map(n=>`<a class="rl" data-sec="${sec}" data-row="${n}">${n}</a>`).join(', '));
   if(id==='c28')out=out.replace(/\b([A-Z]{1,3}\d+)\b/g,(m)=>`<a class="rl" data-sec="TABLEAUX" data-addr="${m}">${m}</a>`);
   return out;
@@ -880,15 +1141,40 @@ function Group(p){
     open?children:null);
 }
 
-function BrandSelect(p){
-  const {cols,value,onChange}=p;const on=!!value&&cols.indexOf(value)>=0;
-  return h('div',{style:{display:'flex',alignItems:'center',gap:6,flexWrap:'wrap',marginBottom:6,fontSize:'.73rem'}},
-    h('span',{style:{color:'#64748b'}},'Filtrer sur la présence de :'),
-    h('select',{value:on?value:'',onChange:ev=>onChange(ev.target.value),style:{fontSize:'.74rem',padding:'2px 4px',borderRadius:6,border:'1px solid '+(on?'#dc2626':'#cbd5e1'),color:on?'#dc2626':'#334155',fontWeight:on?700:400,maxWidth:180}},
-      h('option',{value:''},'Aucune colonne (tous les posts)'),
-      cols.map(n=>h('option',{key:n,value:n},n))));
+function Picker(p){
+  const {value,onChange,options,warn,placeholder}=p;
+  const [open,setOpen]=useState(false);
+  const [q,setQ]=useState('');
+  const cur=options.find(o=>o.value===value);
+  const flt=q?options.filter(o=>String(o.label).toLowerCase().indexOf(q.toLowerCase())>=0):options;
+  let lastG=null;
+  const items=[];
+  flt.forEach((o,i)=>{
+    if(o.group&&o.group!==lastG){lastG=o.group;items.push(h('div',{key:'g'+i,style:{fontSize:'.66rem',fontWeight:800,color:'#94a3b8',padding:'4px 6px 1px',textTransform:'uppercase'}},o.group));}
+    const sel=o.value===value;
+    items.push(h('div',{key:'o'+i,onClick:()=>{onChange(o.value);setOpen(false);setQ('');},style:{padding:'4px 8px',fontSize:'.76rem',cursor:'pointer',borderRadius:5,background:sel?'#dbeafe':'transparent',fontWeight:sel?700:400,color:'#1e293b'}},o.label));
+  });
+  return h('div',{style:{display:'inline-block',maxWidth:'100%',verticalAlign:'top'}},
+    h('button',{onClick:()=>setOpen(!open),style:{padding:'3px 8px',background:'#fff',border:'1px solid '+(warn?'#dc2626':'#cbd5e1'),color:warn?'#dc2626':'#334155',fontWeight:warn?700:500,borderRadius:6,fontSize:'.74rem',cursor:'pointer',textAlign:'left',maxWidth:230,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},(cur?cur.label:(placeholder||'—'))+' ▾'),
+    open?h('div',{style:{marginTop:3,background:'#fff',border:'1px solid #cbd5e1',borderRadius:8,padding:4,maxHeight:220,overflowY:'auto',minWidth:200}},
+      options.length>8?h('input',{value:q,onChange:ev=>setQ(ev.target.value),placeholder:'Rechercher…',style:{width:'100%',fontSize:'.74rem',padding:'3px 6px',marginBottom:4,border:'1px solid #cbd5e1',borderRadius:6}}):null,
+      items.length?items:h('div',{style:{padding:'4px 8px',fontSize:'.74rem',color:'#94a3b8'}},'Aucun résultat')):null);
 }
 
+function BrandSelect(p){
+  const {cols,detected,value,onChange}=p;const on=!!value&&cols.indexOf(value)>=0;
+  const det=detected||[];
+  const opts=[{value:'',label:'Aucune colonne (tous les posts)'}]
+    .concat(det.map(n=>({value:n,label:n,group:'Colonnes de marque détectées'})))
+    .concat(cols.filter(n=>det.indexOf(n)<0).map(n=>({value:n,label:n,group:det.length?'Toutes les autres colonnes':'Toutes les colonnes'})));
+  return h('div',{style:{marginBottom:6,fontSize:'.73rem'}},
+    h('div',{style:{display:'flex',alignItems:'flex-start',gap:6,flexWrap:'wrap'}},
+      h('span',{style:{color:'#64748b',paddingTop:4}},'Filtrer sur la présence de :'),
+      cols.length?h(Picker,{value:on?value:'',onChange,warn:on,options:opts}):h('span',{style:{color:'#b91c1c',paddingTop:4}},'Aucune colonne détectée dans DATA.')),
+    (cols.length&&!det.length)?h('div',{style:{color:'#94a3b8',fontSize:'.68rem',marginTop:2}},'Colonnes de marque non repérées automatiquement : choisissez la colonne voulue dans la liste.'):null);
+}
+
+const TOPN=20;
 const topsBy=(items,isEng,bi)=>{
   const by={};
   items.forEach(x=>{
@@ -898,7 +1184,7 @@ const topsBy=(items,isEng,bi)=>{
     (by[x.p]=by[x.p]||[]).push(x);
   });
   const out={};
-  Object.keys(by).sort().forEach(pl=>{out[pl]=by[pl].sort((a,b)=>(isEng?b.eng-a.eng:b.vis-a.vis)).slice(0,10);});
+  Object.keys(by).sort().forEach(pl=>{out[pl]=by[pl].sort((a,b)=>(isEng?b.eng-a.eng:b.vis-a.vis)).slice(0,TOPN);});
   return out;
 };
 
@@ -917,33 +1203,27 @@ function TopTable(p){
           h('td',{style:{...td,color:'#94a3b8'}},i+1),
           h('td',{style:td},h('a',{className:'rl','data-sec':'DATA','data-row':x.er},x.er)),
           h('td',{style:{...td,maxWidth:90,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'},title:idp},idp),
-          h('td',{style:td},x.url?h('a',{href:x.url,target:'_blank',rel:'noreferrer',style:{color:'#2563eb'}},'ouvrir'):'—'),
+          h('td',{style:td},safeUrl(x.url)?h('a',{href:safeUrl(x.url),target:'_blank',rel:'noreferrer',style:{color:'#2563eb'}},'ouvrir'):'—'),
           h('td',{style:{...td,textAlign:'right',fontWeight:700}},val!==null&&val!==undefined?val.toLocaleString('fr-FR'):'—'));
       }))))));
 }
 
-function RecapTable(p){
-  const {r,brand,onBrand}=p;if(!r||!r.recap||!r.recap.length)return null;
-  const bi=brand?r.brandCols.indexOf(brand):-1;
-  const entries=bi>=0?r.recap.filter(x=>x.b.includes(bi)):r.recap;
-  const agg={};entries.forEach(x=>{const k=x.p+'|'+x.o;const e=agg[k]||(agg[k]={p:x.p,o:x.o,n:0,vis:0});e.n+=x.n;e.vis+=x.vis;});
-  const rec=Object.values(agg);
-  const nAll=r.recap.reduce((a,x)=>a+x.n,0),nSel=rec.reduce((a,x)=>a+x.n,0);
-  const plats=[...new Set(rec.map(x=>x.p))].sort(),oes=[...new Set(rec.map(x=>x.o))].sort();
-  const get=(pl,o)=>rec.find(x=>x.p===pl&&x.o===o);
+function RecapRows(p){
+  const {rows,hasVis}=p;if(!rows||!rows.length)return h('div',{style:{color:'#64748b',fontSize:'.76rem'}},'Aucun post pour cette sélection.');
+  const rec={};rows.forEach(x=>{const k=x.p+'|'+x.o;const e=rec[k]||(rec[k]={p:x.p,o:x.o,n:0,vis:0});e.n++;e.vis+=x.vis||0;});
+  const list=Object.values(rec);
+  const plats=[...new Set(list.map(x=>x.p))].sort(),oes=[...new Set(list.map(x=>x.o))].sort();
+  const get=(pl,o)=>list.find(x=>x.p===pl&&x.o===o);
   const th={padding:'3px 6px',textAlign:'right',color:'#64748b',borderBottom:'1px solid #e2e8f0'},td={padding:'3px 6px',textAlign:'right',borderBottom:'1px solid #f1f5f9'};
-  const tot=(f)=>rec.filter(f).reduce((a,x)=>({n:a.n+x.n,vis:a.vis+x.vis}),{n:0,vis:0});
-  const cell=(e)=>e?e.n+(r.hasVis?' · '+short(e.vis):''):'—';
-  const on=bi>=0;
+  const tot=(f)=>list.filter(f).reduce((a,x)=>({n:a.n+x.n,vis:a.vis+x.vis}),{n:0,vis:0});
+  const cell=(e)=>e?e.n+(hasVis?' · '+short(e.vis):''):'—';
   return h('div',{style:{overflowX:'auto'}},
-    h(BrandSelect,{cols:r.brandCols,value:brand,onChange:onBrand}),
-    on?h('div',{style:{background:'#fef2f2',border:'1px solid #fca5a5',color:'#b91c1c',borderRadius:6,padding:'4px 8px',fontSize:'.74rem',fontWeight:700,marginBottom:6}},'⚠️ Récapitulatif filtré : posts où « '+brand+' » est renseignée ('+nSel+' sur '+nAll+')'):null,
-    h('div',{style:{fontSize:'.73rem',color:'#64748b',marginBottom:6}},'Nombre de posts'+(r.hasVis?' · visibilité cumulée':'')+' par plateforme et type.'),
-    plats.length?h('table',{style:{width:'100%',borderCollapse:'collapse',fontSize:'.73rem'}},
+    h('div',{style:{fontSize:'.73rem',color:'#64748b',marginBottom:6}},'Nombre de posts'+(hasVis?' · visibilité cumulée':'')+' par plateforme et type.'),
+    h('table',{style:{width:'100%',borderCollapse:'collapse',fontSize:'.73rem'}},
       h('thead',null,h('tr',null,h('th',{style:{...th,textAlign:'left'}},'Plateforme'),oes.map(o=>h('th',{key:o,style:th},o)),h('th',{style:th},'Total'))),
       h('tbody',null,
         plats.map(pl=>h('tr',{key:pl},h('td',{style:{...td,textAlign:'left',fontWeight:700}},pl),oes.map(o=>h('td',{key:o,style:td},cell(get(pl,o)))),h('td',{style:{...td,fontWeight:700}},cell(tot(x=>x.p===pl))))),
-        h('tr',{key:'_t'},h('td',{style:{...td,textAlign:'left',fontWeight:800}},'Total'),oes.map(o=>h('td',{key:o,style:{...td,fontWeight:700}},cell(tot(x=>x.o===o)))),h('td',{style:{...td,fontWeight:800}},cell(tot(()=>true)))))):h('div',{style:{color:'#64748b',fontSize:'.76rem'}},'Aucun post pour cette colonne.'));
+        h('tr',{key:'_t'},h('td',{style:{...td,textAlign:'left',fontWeight:800}},'Total'),oes.map(o=>h('td',{key:o,style:{...td,fontWeight:700}},cell(tot(x=>x.o===o)))),h('td',{style:{...td,fontWeight:800}},cell(tot(()=>true)))))));
 }
 
 function PivotVerifier(){
@@ -1134,17 +1414,6 @@ function PivotVerifier(){
       h(Group,{title:'✓ Corrigés depuis la première analyse',accent:'#1d4ed8',count:nRes,open:openG.has('fixed'),onToggle:()=>flip(setOpenG,'fixed')},
         Object.entries(resolved).map(([id,lb])=>h('div',{key:id,style:{background:'#eff6ff',border:'1px solid #bfdbfe',borderRadius:8,padding:'6px 10px',marginBottom:5,fontSize:'.78rem',color:'#1e40af'}},'✓ '+lb))),
       h(Group,{title:'👁 Vus (mis de côté)',count:seenL.length,open:openG.has('seen'),onToggle:()=>flip(setOpenG,'seen')},seenL.map(r=>cardFor(r,'v'))),
-
-      tops&&tops.hasVis&&tops.items.length?h(Group,{title:'🏆 Top 10 par visibilité'+(recapOn?' — FILTRÉ : '+recapBrand:''),accent:recapOn?'#dc2626':null,count:nTopV,open:openG.has('t10'),onToggle:()=>flip(setOpenG,'t10')},h('div',{style:{background:'#fff',borderRadius:8,padding:8,overflowX:'auto'}},
-        h(BrandSelect,{cols:tops.brandCols,value:recapBrand,onChange:setRecapBrand}),
-        recapOn?h('div',{style:{background:'#fef2f2',border:'1px solid #fca5a5',color:'#b91c1c',borderRadius:6,padding:'4px 8px',fontSize:'.74rem',fontWeight:700,marginBottom:6}},'⚠️ Posts filtrés sur « '+recapBrand+' »'):null,
-        h(TopTable,{items:tops.items,isEng:false,bi:bIdx,hasSOA:tops.hasSOA}))):null,
-      tops&&tops.items.length?h(Group,{title:'🔥 Top 10 par engagement'+(recapOn?' — FILTRÉ : '+recapBrand:''),accent:recapOn?'#dc2626':null,count:nTopE,open:openG.has('t10e'),onToggle:()=>flip(setOpenG,'t10e')},h('div',{style:{background:'#fff',borderRadius:8,padding:8,overflowX:'auto'}},
-        h(BrandSelect,{cols:tops.brandCols,value:recapBrand,onChange:setRecapBrand}),
-        recapOn?h('div',{style:{background:'#fef2f2',border:'1px solid #fca5a5',color:'#b91c1c',borderRadius:6,padding:'4px 8px',fontSize:'.74rem',fontWeight:700,marginBottom:6}},'⚠️ Posts filtrés sur « '+recapBrand+' »'):null,
-        h('div',{style:{fontSize:'.72rem',color:'#64748b',marginBottom:6}},'Social Actions si disponible, sinon likes + commentaires (hors websites et stories).'),
-        h(TopTable,{items:tops.items,isEng:true,bi:bIdx,hasSOA:tops.hasSOA}))):null,
-      recap&&recap.recap&&recap.recap.length?h(Group,{title:'📊 Récapitulatif'+(recapOn?' — FILTRÉ : '+recapBrand:''),accent:recapOn?'#dc2626':null,noCount:true,count:1,open:openG.has('recap'),onToggle:()=>flip(setOpenG,'recap')},h('div',{style:{background:'#fff',borderRadius:8,padding:8}},h(RecapTable,{r:recap,brand:recapBrand,onBrand:setRecapBrand}))):null,
 
       h(Group,{title:'ℹ️ Informations',accent:'#0369a1',count:infos.length,open:openG.has('i'),onToggle:()=>flip(setOpenG,'i')},infos.map(r=>cardFor(r,'i'))),
       h(Group,{title:'✅ Contrôles OK',accent:'#15803d',count:oks.length,open:openG.has('ok'),onToggle:()=>flip(setOpenG,'ok')},oks.map(r=>cardFor(r,'ok'))))),
