@@ -1,0 +1,514 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Vérificateur Pivot Social Media</title>
+  <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+  <script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone@7.25.6/babel.min.js"></script>
+  <style>*{box-sizing:border-box}body{margin:0;background:#f0f4f8}@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+  .rl{color:#2563eb;cursor:pointer;text-decoration:underline}table{max-width:100%}</style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel" data-presets="react">
+const { useState, useEffect } = React;
+
+const X = () => ({ utils: {
+  decode_range: (ref) => {
+    const colN = (s) => s.split('').reduce((a, ch) => a * 26 + ch.charCodeAt(0) - 64, 0) - 1;
+    const m = /^([A-Z]+)(\d+):([A-Z]+)(\d+)$/.exec(ref) || /^([A-Z]+)(\d+)$/.exec(ref) && [0, RegExp.$1, RegExp.$2, RegExp.$1, RegExp.$2];
+    return { s: { c: colN(m[1]), r: +m[2] - 1 }, e: { c: colN(m[3]), r: +m[4] - 1 } };
+  },
+  encode_cell: ({ r, c }) => { let s = '', n = c + 1; while (n > 0) { const k = (n - 1) % 26; s = String.fromCharCode(65 + k) + s; n = Math.floor((n - 1) / 26); } return s + (r + 1); }
+}});
+const cs = (c) => { if(!c||c.t==='e')return null; const v=c.v; if(v===null||v===undefined||v==='')return null; return v.toString().trim()||null; };
+const cn = (c) => { if(!c||c.t==='e')return null; const v=c.v; if(v===null||v===undefined||v==='')return null; const n=Number(v); return isNaN(n)?null:n; };
+const isE = (c) => c&&c.t==='e';
+const nP = (s) => s?s.toString().trim().toLowerCase():'';
+const isP = (v,...pp) => pp.includes(nP(v));
+
+function bCM(ws) {
+  const r=X().utils.decode_range(ws['!ref']||'A1:A1');
+  const m={_mxC:r.e.c,_mxR:r.e.r,_mnR:r.s.r,_mnC:r.s.c};
+  for(let c=r.s.c;c<=r.e.c;c++){
+    const cell=ws[X().utils.encode_cell({r:r.s.r,c})];
+    if(cell&&cell.v!==undefined&&cell.v!==null&&cell.v!==''){
+      const k=cell.v.toString().trim().toLowerCase();
+      if(m[k]===undefined)m[k]=c;
+      m['_h'+c]=cell.v.toString().trim();
+    }
+  }
+  return m;
+}
+const gc = (m,...ns) => { for(const n of ns){const k=n.toLowerCase().trim();if(m[k]!==undefined)return m[k];} return -1; };
+const gcAll = (m,...ns) => { const res=[]; for(let c=m._mnC;c<=m._mxC;c++){const h=m['_h'+c];if(!h)continue;const hk=h.toLowerCase().trim();for(const n of ns){if(hk===n.toLowerCase().trim()){res.push(c);break;}}} return res; };
+
+function gR(ws, from) {
+  const r=X().utils.decode_range(ws['!ref']||'A1:A1');
+  const rows=[]; let consec=0;
+  for(let ri=from;ri<=r.e.r;ri++){
+    let any=false; const d={};
+    for(let c=r.s.c;c<=r.e.c;c++){
+      const cell=ws[X().utils.encode_cell({r:ri,c})];
+      d[c]=cell||null;
+      if(cell&&cell.v!==undefined&&cell.v!==null&&cell.v!=='')any=true;
+    }
+    if(any){consec=0;rows.push({ri,er:ri+1,d});}
+    else{consec++;if(consec>=50)break;}
+  }
+  return rows;
+}
+const fL=(ls,mx=20)=>{ if(!ls.length)return''; if(ls.length<=mx)return ls.join(', '); return ls.slice(0,mx).join(', ')+` … (${ls.length} lignes)`;};
+function gBP(rows,pc){const g={};for(const r of rows){const p=nP(cs(r.d[pc]))||'(vide)';(g[p]=g[p]||[]).push(r.er);}return g;}
+const fG=(g,mx=5)=>Object.entries(g).map(([p,ls])=>ls.length>mx?`<strong>${p}</strong> : ${ls.length} lignes`:`<strong>${p}</strong> : lignes ${ls.join(', ')}`).join('<br>');
+const pp=(res,sec,id,st,lb,msg,extra)=>res.push({sec,id,st,lb,msg,...(extra||{})});
+
+const STD=['facebook','instagram','twitter','youtube','linkedin','twitch','tiktok','story','websites'];
+const EXP=['DATA','TABLEAUX','INDEX','Commentaires'];
+
+function analyze(wb){
+  const gs=(name)=>{const s=wb.SheetNames.find(n=>n.toLowerCase()===name.toLowerCase());return s?wb.Sheets[s]:null;};
+  const dWs=gs('data'),tWs=gs('tableaux'),iWs=gs('index'),cWs=gs('commentaires');
+  const res=[];
+  if(!dWs){pp(res,'DATA','nd','w','Onglet DATA manquant',"L'onglet DATA est introuvable.");return res;}
+  aData(dWs,cWs,res);
+  tWs?aTab(tWs,dWs,res):pp(res,'TABLEAUX','nt','w','Onglet TABLEAUX manquant',"L'onglet TABLEAUX est introuvable.");
+  iWs?aIdx(iWs,dWs,res):pp(res,'INDEX','ni','w','Onglet INDEX manquant',"L'onglet INDEX est introuvable.");
+  aRap(dWs,res);
+  return res;
+}
+
+function aData(ws,cWs,res){
+  const m=bCM(ws), rows=gR(ws,2);
+  if(!rows.length){pp(res,'DATA','de','w','Aucune donnée dans DATA',"L'onglet DATA ne contient aucune ligne (à partir de la ligne 3).");return;}
+  const PC=gc(m,'plateforme'),IC=gc(m,'id post','id_post'),DC=gc(m,'date');
+  const MoC=gc(m,'mois'),JC=gc(m,'jour'),SC=gc(m,'semestre'),AC=gc(m,'année','annee');
+  const RTC=gc(m,'rt (tw)','rt(tw)'),RPC=gc(m,'reply (tw)','reply(tw)');
+  const IDPC=gc(m,'id page','id_page'),CC=gc(m,'compte ou requête','compte ou requete'),UC=gc(m,'url');
+  const VC=gc(m,'vues'),SAC=gc(m,'saves'),LKC=gc(m,'likes'),CMC=gc(m,'comments','commentaires');
+  const SOAC=gc(m,'social actions','social_actions'),OEC=gc(m,'owned/paid/earned','owned_paid_earned');
+  const DEPC=gc(m,'dépenses paid','depenses paid'),RVC=gc(m,'ratio visibilité','ratio visibilite','ratio_visibilite');
+  const VISC=gc(m,'visibilité','visibilite'),EQC=gc(m,'équivalent média','equivalent media');
+  const IMPC=gc(m,'imp_tt_ou_connues','imp_tt'),SCPC=gc(m,'scope');
+  const DETC=gc(m,'detection textuelle ?','detection textuelle','détection textuelle ?');
+  const INDC=gc(m,'impression_indiquées','impression_indiquees','impression indiquées');
+
+  if(PC===-1)pp(res,'DATA','c1','w','Colonne "plateforme" introuvable','Colonne "plateforme" non trouvée dans DATA.');
+  else{const e=rows.filter(r=>!cs(r.d[PC]));e.length?pp(res,'DATA','c1','w',`Plateforme — ${e.length} valeur(s) manquante(s)`,`Cellules vides dans "plateforme" — lignes : ${fL(e.map(r=>r.er))}`):pp(res,'DATA','c1','ok','Plateforme — complète','Aucune cellule vide dans "plateforme".');}
+
+  if(IC===-1)pp(res,'DATA','c2','w','Colonne "ID Post" introuvable','Colonne "ID Post" non trouvée dans DATA.');
+  else{const e=rows.filter(r=>!cs(r.d[IC]));if(e.length){const g=gBP(e,PC);pp(res,'DATA','c2','w',`IDs Post manquants (${e.length})`,`${e.length} ID${e.length>1?'s':''} Post manquant${e.length>1?'s':''} :<br>${fG(g)}`);}else pp(res,'DATA','c2','ok','ID Post — complet','Tous les IDs Post sont renseignés.');}
+
+  if(DC===-1)pp(res,'DATA','c3','w','Colonne "Date" introuvable','Colonne "Date" non trouvée dans DATA.');
+  else{const e=rows.filter(r=>!r.d[DC]||r.d[DC].v===undefined||r.d[DC].v===null||r.d[DC].v==='');e.length?pp(res,'DATA','c3','w',`Date — ${e.length} valeur(s) manquante(s)`,`Dates manquantes — lignes : ${fL(e.map(r=>r.er))}`):pp(res,'DATA','c3','ok','Date — complète','Toutes les dates sont renseignées.');}
+
+  const fcs=[{n:'mois',c:MoC},{n:'jour',c:JC},{n:'semestre',c:SC},{n:'année',c:AC},{n:'RT (TW)',c:RTC},{n:'Reply (TW)',c:RPC}];
+  const fM=[],fI=[];
+  for(const fc of fcs){if(fc.c===-1){fM.push(fc.n);}else{const e=rows.filter(r=>!r.d[fc.c]||r.d[fc.c].v===undefined||r.d[fc.c].v===null||r.d[fc.c].v==='');if(e.length)fI.push(`<strong>${fc.n}</strong> : ${e.length} cellule${e.length>1?'s vides':' vide'} — lignes : ${fL(e.map(r=>r.er))}`);}}
+  if(fM.length||fI.length){let msg='';if(fM.length)msg+=`Colonnes introuvables : ${fM.join(', ')}<br>`;if(fI.length)msg+=`Formules non étendues :<br>${fI.join('<br>')}`;pp(res,'DATA','c4','w','Colonnes à formule — non étendues',msg);}
+  else pp(res,'DATA','c4','ok','Colonnes à formule — toutes étendues','mois, jour, semestre, année, RT (TW), Reply (TW) renseignées sur toutes les lignes.');
+
+  const c5=[];
+  if(IDPC===-1)c5.push('Colonne "ID Page" introuvable');
+  else{const e=rows.filter(r=>!cs(r.d[IDPC]));if(e.length){const g=gBP(e,PC);c5.push(`"ID Page" vide (${e.length} lignes) :<br>${fG(g)}`);}}
+  if(CC===-1)c5.push('Colonne "Compte ou Requête" introuvable');
+  else{const e=rows.filter(r=>!cs(r.d[CC]));if(e.length){const g=gBP(e,PC);c5.push(`"Compte ou Requête" vide (${e.length} lignes) :<br>${fG(g)}`);}}
+  c5.length?pp(res,'DATA','c5','w','ID Page / Compte ou Requête — manquants',c5.join('<br><br>')):pp(res,'DATA','c5','ok','ID Page / Compte ou Requête — complets','Toutes les valeurs sont renseignées.');
+
+  if(UC!==-1&&PC!==-1){
+    const fbR=rows.filter(r=>isP(cs(r.d[PC]),'facebook'));
+    const pat=/^https:\/\/www\.facebook\.com\/\d+_\d+$/;
+    const reelR=fbR.filter(r=>{const u=cs(r.d[UC]);return u&&/\/reel\//i.test(u);});
+    const bad=fbR.filter(r=>{const u=cs(r.d[UC]);return!u||(!pat.test(u)&&!/\/reel\//i.test(u));});
+    if(bad.length)pp(res,'DATA','c6','w','URLs Facebook — format incorrect',`${bad.length} URL${bad.length>1?'s':''} non conformes — bien prendre le toplevel URL Apify au format <code>https://www.facebook.com/143692875711931_1388589896629451</code><br>Lignes : ${fL(bad.map(r=>r.er))}`);
+    else if(fbR.length)pp(res,'DATA','c6','ok','URLs Facebook — conformes',`Toutes les URLs Facebook (${fbR.length}) sont conformes.`);
+    else pp(res,'DATA','c6','i','URLs Facebook — aucune ligne Facebook','Aucune ligne "facebook" détectée.');
+    if(reelR.length)pp(res,'DATA','c6r','i','URLs Facebook — Reels détectés',`${reelR.length} URL${reelR.length>1?'s':''} de type Reel détectée${reelR.length>1?'s':''} (contient "/reel/") — format différent du standard, vérifier la collecte. Pas besoin de corriger. Lignes : ${fL(reelR.map(r=>r.er))}`);
+  } else pp(res,'DATA','c6','i','URLs Facebook — impossible','Colonnes "URL" ou "plateforme" introuvables.');
+
+  if(IC!==-1&&PC!==-1){
+    const fbR=rows.filter(r=>isP(cs(r.d[PC]),'facebook'));
+    const pfb=fbR.filter(r=>{const v=cs(r.d[IC]);return v&&v.toLowerCase().startsWith('pfbid');});
+    if(pfb.length)pp(res,'DATA','c6p','w','ID Post Facebook — format pfbid détecté',`${pfb.length} ID${pfb.length>1?'s':''} Post Facebook commençant par "pfbid" — on attend un format numérique (ex : <code>143692875711931_1388589896629451</code>). Lignes : ${fL(pfb.map(r=>r.er))}`);
+  }
+
+  if(VC!==-1&&PC!==-1){const ytR=rows.filter(r=>isP(cs(r.d[PC]),'youtube','tiktok'));const miss=ytR.filter(r=>cn(r.d[VC])===null);if(miss.length){const g=gBP(miss,PC);pp(res,'DATA','c7','w','Vues YouTube/TikTok manquantes',`${miss.length} ligne${miss.length>1?'s':''} sans vues :<br>${fG(g)}`);}else if(ytR.length)pp(res,'DATA','c7','ok','Vues YouTube/TikTok — complètes',`Toutes les lignes YouTube/TikTok (${ytR.length}) ont des vues.`);else pp(res,'DATA','c7','i','Vues YouTube/TikTok — aucune ligne','Aucune ligne YouTube ou TikTok.');}
+  else pp(res,'DATA','c7','i','Vues YouTube/TikTok — impossible','Colonnes "vues" ou "plateforme" introuvables.');
+
+  if(LKC!==-1&&CMC!==-1&&PC!==-1){const excl=['story','twitch'];const elig=rows.filter(r=>{const p=nP(cs(r.d[PC]));return!excl.includes(p)&&p!=='';});const mL=elig.filter(r=>cn(r.d[LKC])===null);const mC=elig.filter(r=>cn(r.d[CMC])===null);const is=[];if(mL.length){const g=gBP(mL,PC);is.push(`<strong>Likes manquants</strong> (${mL.length} lignes) :<br>${fG(g)}`);}if(mC.length){const g=gBP(mC,PC);is.push(`<strong>Comments manquants</strong> (${mC.length} lignes) :<br>${fG(g)}`);}is.length?pp(res,'DATA','c8','w','Likes et Commentaires manquants',is.join('<br><br>')):pp(res,'DATA','c8','ok','Likes et Commentaires — complets','Toutes les valeurs sont renseignées.');}
+  else pp(res,'DATA','c8','i','Likes/Comments — impossible','Colonnes "likes", "comments" ou "plateforme" introuvables.');
+
+  if(LKC!==-1&&PC!==-1){const igR=rows.filter(r=>isP(cs(r.d[PC]),'instagram'));const hid=igR.filter(r=>{const v=cn(r.d[LKC]);return v===null||v===-1;});if(hid.length)pp(res,'DATA','c9','w','Engagement caché Instagram non corrigé',`Attention, ${hid.length} post${hid.length>1?'s':''} Instagram avec engagement caché non corrigé${hid.length>1?'s':''} (likes = -1 ou vide) — lignes : ${fL(hid.map(r=>r.er))}`);else if(igR.length)pp(res,'DATA','c9','ok','Engagement caché Instagram — OK','Aucun post Instagram avec engagement caché non corrigé.');else pp(res,'DATA','c9','i','Engagement Instagram — aucune ligne','Aucune ligne Instagram.');}
+
+  if(SOAC!==-1&&PC!==-1){const e=rows.filter(r=>cn(r.d[SOAC])===null);if(e.length){const g=gBP(e,PC);pp(res,'DATA','c10','w','Social Actions — valeurs manquantes',`${e.length} ligne${e.length>1?'s':''} sans "Social Actions" :<br>${fG(g)}`);}else pp(res,'DATA','c10','ok','Social Actions — complet','Toutes les valeurs "Social Actions" sont renseignées.');}
+  else pp(res,'DATA','c10','i','Social Actions — impossible','Colonne "Social Actions" introuvable.');
+
+  if(OEC!==-1){const valid=['owned','paid','earned'];const inv=[],bCase=[];for(const r of rows){const v=cs(r.d[OEC]);if(!v||!valid.includes(v.toLowerCase().trim()))inv.push(r);else if(v.trim()!==v.toLowerCase().trim())bCase.push(r);}const is=[];if(inv.length){const g=gBP(inv,PC);is.push(`Valeurs invalides/manquantes (${inv.length} lignes) :<br>${fG(g)}`);}if(bCase.length)is.push(`Incohérence de casse dans owned/paid/earned — uniformiser en minuscules. (${bCase.length} ligne${bCase.length>1?'s':''})`);is.length?pp(res,'DATA','c11','w','owned/paid/earned — incohérences',is.join('<br><br>')):pp(res,'DATA','c11','ok','owned/paid/earned — conforme','Toutes les valeurs sont en minuscules.');}
+  else pp(res,'DATA','c11','i','owned/paid/earned — impossible','Colonne introuvable.');
+
+  const twR=rows.filter(r=>isP(cs(r.d[PC]),'twitter','x'));
+  if(twR.length){if(IMPC===-1)pp(res,'DATA','c13','w','Twitter — "imp_tt_ou_connues" introuvable','Colonne des impressions Twitter non trouvée.');else{const is=[],noI=[],wrC=[];for(const r of twR){const iv=cn(r.d[IMPC]);const vv=VC!==-1?cn(r.d[VC]):null;if(iv===null){if(vv!==null&&vv>0)wrC.push(r.er);else noI.push(r.er);}}if(wrC.length)is.push(`Erreur : les impressions Twitter doivent être dans imp_tt_ou_connues et non dans vues — lignes : ${fL(wrC)}`);if(noI.length)is.push(`Impressions Twitter manquantes (${noI.length} ligne${noI.length>1?'s':''}) — lignes : ${fL(noI)}`);is.length?pp(res,'DATA','c13','w','Twitter — Impressions',is.join('<br>')):pp(res,'DATA','c13','ok','Twitter — Impressions complètes',`Toutes les impressions Twitter (${twR.length} lignes) sont dans imp_tt_ou_connues.`);}}
+  else pp(res,'DATA','c13','i','Twitter — aucune ligne','Aucune ligne Twitter/X.');
+
+  if(twR.length){if(SAC===-1)pp(res,'DATA','c14','w','Twitter — "saves" introuvable','Colonne "saves" non trouvée.');else{const ms=twR.filter(r=>cn(r.d[SAC])===null);ms.length?pp(res,'DATA','c14','w','Twitter — Mise à jour engagement manquante',`Mise à jour engagement Twitter manquante pour ${ms.length} ligne${ms.length>1?'s':''} (saves vide) — lignes : ${fL(ms.map(r=>r.er))}`):pp(res,'DATA','c14','ok','Twitter — Saves complets','Toutes les lignes Twitter ont des saves.');}}
+
+  const stR=rows.filter(r=>isP(cs(r.d[PC]),'story'));
+  if(stR.length){
+    const followerCols=[];for(let c=m._mnC;c<=m._mxC;c++){const h=m['_h'+c];if(h&&h.toLowerCase().includes('followers'))followerCols.push(c);}
+    const mf=stR.filter(r=>followerCols.length===0||!followerCols.some(c=>cn(r.d[c])!==null));
+    const colNames=followerCols.map(c=>m['_h'+c]).join(', ')||'(aucune colonne "followers" trouvée)';
+    mf.length?pp(res,'DATA','c15','w','Story — Followers manquants',`Followers manquants pour les posts story — ${mf.length} ligne${mf.length>1?'s':''} sans valeur numérique dans les colonnes followers détectées (${colNames}) — lignes : ${fL(mf.map(r=>r.er))}`):pp(res,'DATA','c15','ok','Story — Followers complets',`Tous les posts story ont des followers renseignés (colonnes : ${colNames}).`);
+  } else pp(res,'DATA','c15','i','Story — aucune ligne','Aucune ligne "story".');
+
+  if(OEC!==-1){const pR=rows.filter(r=>{const v=cs(r.d[OEC]);return v&&v.toLowerCase().trim()==='paid';});if(pR.length){if(DEPC===-1)pp(res,'DATA','c16','w','Paid — "dépenses paid" introuvable','Colonne "dépenses paid" non trouvée.');else{const md=pR.filter(r=>cn(r.d[DEPC])===null);if(md.length){const g=gBP(md,PC);pp(res,'DATA','c16','w','Paid — Dépenses non indiquées',`Dépenses paid non indiquées pour ${md.length} ligne${md.length>1?'s':''} :<br>${fG(g)}`);}else pp(res,'DATA','c16','ok','Paid — Dépenses complètes','Toutes les lignes "paid" ont des dépenses renseignées.');}}else pp(res,'DATA','c16','i','Paid — aucune ligne "paid"','Aucune ligne avec owned/paid/earned = "paid".');}
+
+  if(RVC!==-1){const ov=rows.filter(r=>{const v=cn(r.d[RVC]);return v!==null&&v>1;});if(ov.length){const g=gBP(ov,PC);pp(res,'DATA','c17','w','Ratio visibilité > 1 détecté',`${ov.length} valeur${ov.length>1?'s':''} de "ratio visibilité" > 1 :<br>${fG(g)}`);}else pp(res,'DATA','c17','ok','Ratio visibilité — OK','Aucun ratio de visibilité > 1.');}
+  else pp(res,'DATA','c17','i','Ratio visibilité — impossible','Colonne "ratio visibilité" introuvable.');
+
+  const eCols=[];if(VISC!==-1)eCols.push({n:'visibilité',c:VISC});if(EQC!==-1)eCols.push({n:'équivalent média',c:EQC});
+  if(!eCols.length)pp(res,'DATA','c18','i','Erreurs formule — impossible','Colonnes "visibilité" et/ou "équivalent média" introuvables.');
+  else{const eI=[];for(const ec of eCols){const er=rows.filter(r=>isE(r.d[ec.c]));if(er.length){const g=gBP(er,PC);eI.push(`<strong>${ec.n}</strong> : ${er.length} cellule${er.length>1?'s':''} en erreur :<br>${fG(g)}`);}}eI.length?pp(res,'DATA','c18','w','Cellules en erreur (visibilité / équivalent média)',eI.join('<br><br>')):pp(res,'DATA','c18','ok','Visibilité / Équivalent média — OK','Aucune cellule en erreur (#REF!, #DIV/0!, etc.).');}
+
+  if(VISC!==-1&&PC!==-1){const excl=['websites','story'];const el=rows.filter(r=>{const p=nP(cs(r.d[PC]));return!excl.includes(p)&&p!=='';});const ytZ=el.filter(r=>isP(cs(r.d[PC]),'youtube','tiktok')&&(cn(r.d[VISC])===null||cn(r.d[VISC])===0));const othZ=el.filter(r=>{const p=nP(cs(r.d[PC]));if(['youtube','tiktok'].includes(p))return false;const vis=cn(r.d[VISC]);if(vis!==null&&vis>0)return false;const lk=LKC!==-1?(cn(r.d[LKC])||0):0;const cm=CMC!==-1?(cn(r.d[CMC])||0):0;return(vis===null||vis===0)&&lk===0&&cm===0;});const is=[];if(ytZ.length){const g=gBP(ytZ,PC);is.push(`Probable erreur de visibilité pour youtube/tiktok (${ytZ.length} ligne${ytZ.length>1?'s':''}) :<br>${fG(g)}`);}if(othZ.length){const g=gBP(othZ,PC);is.push(`Ces posts n'ont aucune donnée d'engagement — indiquer au minimum un like (${othZ.length} ligne${othZ.length>1?'s':''}) :<br>${fG(g)}`);}is.length?pp(res,'DATA','c19','w','Visibilité nulle hors websites/stories',is.join('<br><br>')):pp(res,'DATA','c19','ok','Visibilité nulle — OK','Aucun cas de visibilité nulle problématique.');}
+
+  if(PC!==-1&&VISC!==-1){const wR=rows.filter(r=>isP(cs(r.d[PC]),'websites'));const lv=wR.filter(r=>{const v=cn(r.d[VISC]);return v!==null&&v<2500;});if(lv.length)pp(res,'DATA','c20','w','Websites — Visibilité < 2 500',`Il faut indiquer 2 500 pour les sites web ayant une visibilité < 2 500. ${lv.length} ligne${lv.length>1?'s':''} concernée${lv.length>1?'s':''} — lignes : ${fL(lv.map(r=>r.er))}`);else if(wR.length)pp(res,'DATA','c20','ok','Websites — Visibilité minimale OK','Toutes les lignes websites ont une visibilité >= 2 500.');else pp(res,'DATA','c20','i','Websites — aucune ligne','Aucune ligne "websites".');}
+
+  if(PC!==-1&&VISC!==-1){const wR=rows.filter(r=>isP(cs(r.d[PC]),'websites'));const hv=wR.filter(r=>{const v=cn(r.d[VISC]);return v!==null&&v>500000;});if(hv.length){let msg=`${hv.length} ligne${hv.length>1?'s websites avec':' website avec'} visibilité > 500 000 :<br>`;const noU=[];if(hv.length<=25){msg+='<table><tr><th>#</th><th>Ligne</th><th>URL</th><th>ID Page</th><th>Visibilité</th></tr>';hv.forEach((r,i)=>{const url=UC!==-1?(cs(r.d[UC])||'—'):'—';const idp=IDPC!==-1?(cs(r.d[IDPC])||'—'):'—';const vis=cn(r.d[VISC]);if(UC!==-1&&!cs(r.d[UC]))noU.push(r.er);msg+=`<tr><td>${i+1}</td><td>${r.er}</td><td style="font-size:.73rem">${url}</td><td>${idp}</td><td>${vis!==null?vis.toLocaleString('fr-FR'):'—'}</td></tr>`;});msg+='</table>';}else{msg+='(Plus de 25 lignes — voir le fichier)';for(const r of hv){if(UC!==-1&&!cs(r.d[UC]))noU.push(r.er);}}if(noU.length)msg+=`<br>⚠️ ${noU.length} ligne${noU.length>1?'s':''} sans URL (lignes : ${fL(noU)})`;pp(res,'DATA','c21','w','Websites — Visibilité > 500 000',msg);}else if(wR.length)pp(res,'DATA','c21','ok','Websites — Aucune visibilité > 500 000','Aucune ligne website avec visibilité > 500 000.');}
+
+  {const dI=[];if(IC!==-1){const mp={};for(const r of rows){const v=cs(r.d[IC]);if(!v)continue;(mp[v]=mp[v]||[]).push(r);}const dups=Object.entries(mp).filter(([,v])=>v.length>1);if(dups.length){const bp={};let totalRowsI=0;for(const [,rr] of dups)for(const r of rr){const p=nP(cs(r.d[PC]));bp[p]=(bp[p]||0)+1;totalRowsI++;}const ps=Object.entries(bp).map(([p,c])=>`${p} : ${c} ligne${c>1?'s':''}`).join(', ');const exI=dups.slice(0,3).map(([v,rr])=>`"${String(v).length>50?String(v).substring(0,47)+'…':v}" (lignes ${rr.map(r=>r.er).join(', ')})`).join(' ; ');dI.push(`<strong>Doublons ID Post</strong> : ${dups.length} valeur${dups.length>1?'s':''} dupliquée${dups.length>1?'s':''} → ${totalRowsI} lignes affectées au total — risque de double comptage.<br>Lignes affectées par plateforme : ${ps}<br><em>Exemples : ${exI}${dups.length>3?' …':''}</em>`);}}if(UC!==-1){const mu={};for(const r of rows){const v=cs(r.d[UC]);if(!v)continue;(mu[v]=mu[v]||[]).push(r);}const dups=Object.entries(mu).filter(([,v])=>v.length>1);if(dups.length){const bp={};let totalRowsU=0;for(const [,rr] of dups)for(const r of rr){const p=nP(cs(r.d[PC]));bp[p]=(bp[p]||0)+1;totalRowsU++;}const ps=Object.entries(bp).map(([p,c])=>`${p} : ${c} ligne${c>1?'s':''}`).join(', ');const exU=dups.slice(0,3).map(([v,rr])=>`"${String(v).length>70?String(v).substring(0,67)+'…':v}" (lignes ${rr.map(r=>r.er).join(', ')})`).join(' ; ');dI.push(`<strong>Doublons URL</strong> : ${dups.length} URL${dups.length>1?'s':''} dupliquée${dups.length>1?'s':''} → ${totalRowsU} lignes affectées au total — risque de double comptage.<br>Lignes affectées par plateforme : ${ps}<br><em>Exemples : ${exU}${dups.length>3?' …':''}</em>`);}}dI.length?pp(res,'DATA','c22','w','Doublons détectés (ID Post / URL)',dI.join('<br><br>')):pp(res,'DATA','c22','ok','Doublons — aucun','Aucun doublon dans "ID Post" ni "URL".');}
+
+  if(cWs&&INDC!==-1&&DETC!==-1){const bC=[];for(let c=INDC+1;c<DETC;c++){const h=m['_h'+c];if(h&&h.toLowerCase()!=='tp_michelin')bC.push(h);}const kr=X().utils.decode_range(cWs['!ref']||'A1:A1');const cBr=[];for(let r=7;r<=kr.e.r;r++){const cell=cWs[X().utils.encode_cell({r,c:10})];const v=cs(cell);if(v)cBr.push(v);}if(!cBr.length)pp(res,'DATA','c23','i','Cohérence noms de marques — Commentaires K8+ vide','Aucune marque trouvée dans Commentaires colonne K (à partir de K8).');else{const mD=cBr.filter(b=>!bC.includes(b));const eD=bC.filter(b=>!cBr.includes(b));if(mD.length||eD.length){let msg='';if(mD.length)msg+=`Marques dans Commentaires K8+ absentes de DATA : <strong>${mD.join(', ')}</strong><br>`;if(eD.length)msg+=`Colonnes marques dans DATA absentes de Commentaires K8+ : <strong>${eD.join(', ')}</strong><br>`;msg+="Il faut modifier les noms des marques dans l'onglet Commentaires colonne K";pp(res,'DATA','c23','w','Cohérence noms de marques — incohérence',msg);}else pp(res,'DATA','c23','ok','Cohérence noms de marques — OK',`Les ${bC.length} marques correspondent entre DATA et Commentaires.`);}}
+  else pp(res,'DATA','c23','i','Cohérence noms de marques — vérification partielle','Onglet Commentaires absent ou colonnes de référence introuvables.');
+
+  if(SCPC!==-1){const es=rows.filter(r=>!cs(r.d[SCPC]));es.length?pp(res,'DATA','c24','w','Colonne "scope" — valeurs manquantes',`Attention, ${es.length} valeur${es.length>1?'s':''} manquante${es.length>1?'s':''} dans la colonne scope — les résultats ne remonteront pas dans l'onglet Tableaux. Lignes : ${fL(es.map(r=>r.er))}`):pp(res,'DATA','c24','ok','Colonne "scope" — complète','Toutes les valeurs scope sont renseignées.');}
+  else pp(res,'DATA','c24','i','Scope — impossible','Colonne "scope" introuvable.');
+
+  if(DETC!==-1&&PC!==-1){const pg={};for(const r of rows){const p=nP(cs(r.d[PC]));if(!p)continue;if(!pg[p])pg[p]={t:0,d:0};pg[p].t++;const det=cs(r.d[DETC]);if(det)pg[p].d++;}const nd=Object.entries(pg).filter(([,v])=>v.d===0).map(([p])=>p);nd.length?pp(res,'DATA','c25','w','Détection textuelle — manquante pour certaines plateformes',`Aucune détection textuelle pour : <strong>${nd.join(', ')}</strong>. Si l'équivalent média est utile, ces plateformes ne seront pas prises en compte.`):pp(res,'DATA','c25','ok','Détection textuelle — OK','Au moins une détection textuelle pour chaque plateforme.');}
+  else pp(res,'DATA','c25','i','Détection textuelle — impossible','Colonne "detection textuelle ?" introuvable.');
+
+  {const bA=[],bM=[];for(const r of rows){if(AC!==-1){const v=cn(r.d[AC]);if(v!==null&&(v<2000||v>2099))bA.push(r.er);}if(MoC!==-1){const v=cn(r.d[MoC]);if(v!==null&&(v<1||v>12))bM.push(r.er);}}const is=[];if(bA.length)is.push(`Valeurs d'année aberrantes (hors 2000-2099) — probable erreur de formatage : ${fL(bA)}`);if(bM.length)is.push(`Valeurs de mois impossibles (hors 1-12) — probable erreur de formatage : ${fL(bM)}`);is.length?pp(res,'DATA','c26','w','Cohérence Année / Mois — valeurs aberrantes',is.join('<br>')):pp(res,'DATA','c26','ok','Cohérence Année / Mois — OK','Aucune valeur aberrante dans les colonnes Année et Mois.');}
+
+  if(VISC!==-1&&PC!==-1){const pg={};for(const r of rows){const p=nP(cs(r.d[PC]));if(!p)continue;(pg[p]=pg[p]||[]).push(r);}const t10={};for(const [pl,rr] of Object.entries(pg)){const s=rr.filter(r=>cn(r.d[VISC])!==null).sort((a,b)=>(cn(b.d[VISC])||0)-(cn(a.d[VISC])||0)).slice(0,10);if(s.length)t10[pl]=s;}res.push({sec:'TOP10',id:'c27',st:'i',lb:'Top 10 visibilité par plateforme',msg:'',t10,UC,IDPC,VISC});}
+
+  if(PC!==-1){const exclEng=['websites','story'];const pg={};for(const r of rows){const p=nP(cs(r.d[PC]));if(!p||exclEng.includes(p))continue;(pg[p]=pg[p]||[]).push(r);}const t10e={};const getEng=(r)=>SOAC!==-1&&cn(r.d[SOAC])!==null?(cn(r.d[SOAC])||0):((LKC!==-1?cn(r.d[LKC])||0:0)+(CMC!==-1?cn(r.d[CMC])||0:0));for(const [pl,rr] of Object.entries(pg)){const s=[...rr].sort((a,b)=>getEng(b)-getEng(a)).slice(0,10);if(s.length)t10e[pl]=s;}res.push({sec:'TOP10ENG',id:'c27b',st:'i',lb:'Top 10 engagement par plateforme',msg:'',t10:t10e,UC,IDPC,VISC,SOAC,LKC,CMC});}
+}
+
+function aTab(ws,dWs,res){
+  const r=X().utils.decode_range(ws['!ref']||'A1:A1');
+  const errs=[];
+  for(let ri=r.s.r;ri<=r.e.r;ri++)for(let c=r.s.c;c<=r.e.c;c++){const cell=ws[X().utils.encode_cell({r:ri,c})];if(cell&&cell.t==='e')errs.push(X().utils.encode_cell({r:ri,c}));}
+  errs.length?pp(res,'TABLEAUX','c28','w','Cellules en erreur dans TABLEAUX',`${errs.length} cellule${errs.length>1?'s':''} en erreur : ${fL(errs)}`):pp(res,'TABLEAUX','c28','ok','TABLEAUX — aucune erreur','Aucune cellule en erreur (#REF!, #DIV/0!, etc.) dans TABLEAUX.');
+  const b2=ws['B2'];const b2v=b2?cs(b2):null;
+  if(!b2v||b2v==='0')pp(res,'TABLEAUX','c29','w','Cellule B2 — Période vide ou non définie','La période du tableau est vide ou non définie — aucune donnée ne peut remonter depuis Data.');
+  else{let ok=false;if(dWs){const dm=bCM(dWs);const sc=gc(dm,'scope');if(sc!==-1){const dr=gR(dWs,2);const sv=new Set(dr.map(r=>cs(r.d[sc])).filter(Boolean));ok=sv.has(b2v);}}if(!ok&&dWs)pp(res,'TABLEAUX','c29','w',`Cellule B2 ("${b2v}") — valeur non trouvée dans scope DATA`,`La valeur "${b2v}" ne correspond à aucune valeur de scope dans DATA. Aucune donnée ne remontera.`);else pp(res,'TABLEAUX','c29','ok',`Cellule B2 — Période : "${b2v}"`,`B2 = "${b2v}"${ok?' — valeur trouvée dans scope DATA.':'.'}`);}
+  if(dWs){const dm=bCM(dWs);const dpc=gc(dm,'plateforme');const doc=gc(dm,'owned/paid/earned');const dr=gR(dWs,2);if(dpc!==-1&&doc!==-1){const combos=new Set();for(const r of dr){const p=nP(cs(r.d[dpc]));const o=cs(r.d[doc]);if(p&&o)combos.add(`${p} + ${o.toLowerCase().trim()}`);}if(combos.size)pp(res,'TABLEAUX','c30','i','Combinaisons plateforme + owned/paid/earned dans DATA',`Combinaisons présentes dans DATA : ${Array.from(combos).join(', ')}<br>Vérifiez que ces combinaisons remontent dans l'onglet TABLEAUX.`);}}
+}
+
+function aIdx(ws,dWs,res){
+  const m=bCM(ws);const iR=gR(ws,1);
+  const PC=gc(m,'plateforme');const AUC=gc(m,'author_username','author username');const CC=gc(m,'compte','compte ou requête');const UC=gc(m,'url');
+  if(!iR.length){pp(res,'INDEX','c31','w','Index non rempli',"L'index n'a pas été rempli — aucune donnée détectée.");return;}
+  else pp(res,'INDEX','c31','ok','Index — population OK',`${iR.length} entrée${iR.length>1?'s':''} dans l'index.`);
+  if(PC!==-1){const wp=iR.filter(r=>cs(r.d[PC]));const ma=wp.filter(r=>AUC===-1||!cs(r.d[AUC]));const mc=wp.filter(r=>CC===-1||!cs(r.d[CC]));const is=[];if(AUC===-1)is.push('Colonne "author_username" introuvable dans INDEX');else if(ma.length)is.push(`"author_username" manquant — ${ma.length} ligne${ma.length>1?'s':''} — lignes : ${fL(ma.map(r=>r.er))}`);if(CC===-1)is.push('Colonne "Compte" introuvable dans INDEX');else if(mc.length)is.push(`"Compte" manquant — ${mc.length} ligne${mc.length>1?'s':''} — lignes : ${fL(mc.map(r=>r.er))}`);is.length?pp(res,'INDEX','c32','w','Index — author_username ou Compte manquants',is.join('<br>')):pp(res,'INDEX','c32','ok','Index — author_username et Compte complets','Tous les champs author_username et Compte sont renseignés.');}
+  if(UC!==-1&&PC!==-1){const wp=iR.filter(r=>cs(r.d[PC]));const mu=wp.filter(r=>!cs(r.d[UC]));if(mu.length){const g=gBP(mu,PC);const pts=Object.entries(g).map(([p,ls])=>`<strong>${p}</strong> (${ls.length} ligne${ls.length>1?'s':''})`);pp(res,'INDEX','c33','w',"URLs manquantes dans l'index",`URLs manquantes pour les plateformes suivantes : ${pts.join(', ')}`);}else pp(res,'INDEX','c33','ok','Index — URLs complètes','Toutes les entrées ont une URL.');
+  const pats={facebook:/^https:\/\/www\.facebook\.com\//,instagram:/^https:\/\/www\.instagram\.com\//,twitter:/^https:\/\/(x\.com|twitter\.com)\//,x:/^https:\/\/(x\.com|twitter\.com)\//,linkedin:/^https:\/\/(www\.|fr\.)?linkedin\.com\/(in|company)\//,tiktok:/^https:\/\/www\.tiktok\.com\/@/,youtube:/^https:\/\/www\.youtube\.com\//,twitch:/^https:\/\/www\.twitch\.tv\//};
+  const bad=[];for(const r of iR){const p=nP(cs(r.d[PC]));const u=cs(r.d[UC]);if(!p||!u||!pats[p])continue;if(!pats[p].test(u))bad.push({er:r.er,p});}if(bad.length){const g={};for(const b of bad)(g[b.p]=g[b.p]||0)+1;const s=Object.entries(g).map(([p,c])=>`<strong>${p}</strong> : ${c} URL${c>1?'s':''}`).join(', ');pp(res,'INDEX','c34','w','Index — URLs non conformes',`${bad.length} URL${bad.length>1?'s':''} non conforme${bad.length>1?'s':''} au format attendu : ${s}`);}else pp(res,'INDEX','c34','ok','Index — Cohérence plateforme/URL OK',"Tous les formats d'URL sont conformes à la plateforme.");}
+}
+
+function aRap(ws,res){
+  const m=bCM(ws);const PC=gc(m,'plateforme');const RVC=gc(m,'ratio visibilité','ratio visibilite');const rows=gR(ws,2);
+  const wR=rows.filter(r=>isP(cs(r.d[PC]),'websites'));
+  if(wR.length)pp(res,'Rappels','rw','i','Websites — Vérification source de visibilité',"Pour les websites, est-ce que la valeur est bien celle du media downloader ou de Similarweb ((visy - taux de rebond) / 30 / 2) ? Si c'est directement une valeur SemRush, il faut utiliser le semrush_unique_visitors.");
+  if(RVC!==-1){const rv=rows.map(r=>cn(r.d[RVC])).filter(v=>v!==null);if(rv.length&&rv.every(v=>v===1||v===0.3))pp(res,'Rappels','rr','i','Ratios par défaut non modifiés',"Les valeurs des ratios par défaut sont restées (toutes à 1 ou 0.3) — si l'équivalent média est utile pour ce rapport, il faut les modifier.");}
+  if(PC!==-1){const allP=new Set(rows.map(r=>nP(cs(r.d[PC]))).filter(Boolean));const ns=Array.from(allP).filter(p=>!STD.includes(p));if(ns.length)pp(res,'Rappels','rns','i','Plateformes non standards détectées',`Attention, la ou les plateformes <strong>${ns.join(', ')}</strong> ne sont pas prises en compte dans l'onglet Tableau — contacter Clément pour ajustement.`);}
+}
+
+function T10Table({t10Ref, isEng}) {
+  if(!t10Ref||!t10Ref.t10||!Object.keys(t10Ref.t10).length)return null;
+  const getEng=(r)=>{if(t10Ref.SOAC!==-1&&cn(r.d[t10Ref.SOAC])!==null)return cn(r.d[t10Ref.SOAC]);const lk=t10Ref.LKC!==-1?cn(r.d[t10Ref.LKC])||0:0;const cm=t10Ref.CMC!==-1?cn(r.d[t10Ref.CMC])||0:0;return lk+cm;};
+  const engLabel=t10Ref.SOAC!==-1?'Social Actions':'Likes + Comm.';
+  const hdrBg=isEng?'#fdf4ff':'#eff6ff';const hdrColor=isEng?'#7e22ce':'#1e40af';const brd=isEng?'#e9d5ff':'#dbeafe';const aColor=isEng?'#7e22ce':'#2563eb';
+  return (<div>{Object.entries(t10Ref.t10).map(([pl,rr])=>(
+    <div key={pl} style={{marginBottom:'1.25rem'}}>
+      <div style={{background:hdrBg,padding:'.45rem .75rem',borderRadius:'6px 6px 0 0',color:hdrColor,fontWeight:700,fontSize:'.87rem',border:'1px solid '+brd,borderBottom:'none'}}>{pl}</div>
+      <table style={{width:'100%',borderCollapse:'collapse',fontSize:'.79rem',border:'1px solid '+brd}}>
+        <thead><tr style={{background:'#f8fafc'}}>
+          <th style={{padding:'.4rem .6rem',textAlign:'left',borderBottom:'1px solid '+brd,color:'#64748b'}}>#</th>
+          <th style={{padding:'.4rem .6rem',textAlign:'left',borderBottom:'1px solid '+brd,color:'#64748b'}}>Ligne</th>
+          <th style={{padding:'.4rem .6rem',textAlign:'left',borderBottom:'1px solid '+brd,color:'#64748b'}}>URL</th>
+          <th style={{padding:'.4rem .6rem',textAlign:'left',borderBottom:'1px solid '+brd,color:'#64748b'}}>ID Page</th>
+          <th style={{padding:'.4rem .6rem',textAlign:'left',borderBottom:'1px solid '+brd,color:'#64748b'}}>{isEng?engLabel:'Visibilité'}</th>
+        </tr></thead>
+        <tbody>{rr.map((r,i)=>{
+          const url=t10Ref.UC!==-1?(cs(r.d[t10Ref.UC])||'—'):'—';
+          const idp=t10Ref.IDPC!==-1?(cs(r.d[t10Ref.IDPC])||'—'):'—';
+          const val=isEng?getEng(r):cn(r.d[t10Ref.VISC]);
+          return(<tr key={i} style={{borderBottom:'1px solid #f1f5f9'}}>
+            <td style={{padding:'.38rem .6rem',color:'#94a3b8'}}>{i+1}</td>
+            <td style={{padding:'.38rem .6rem'}}><a className="rl" data-sec="DATA" data-row={r.er}>{r.er}</a></td>
+            <td style={{padding:'.38rem .6rem',wordBreak:'break-all',maxWidth:220,fontSize:'.73rem'}}>{url!=='—'?<a href={url} target="_blank" rel="noreferrer" style={{color:aColor}}>{url}</a>:'—'}</td>
+            <td style={{padding:'.38rem .6rem'}}>{idp}</td>
+            <td style={{padding:'.38rem .6rem',fontWeight:600}}>{val!==null?val.toLocaleString('fr-FR'):'—'}</td>
+          </tr>);
+        })}</tbody>
+      </table>
+    </div>
+  ))}</div>);
+}
+
+
+/* ───────── Lecture du classeur ouvert via Office.js ───────── */
+window.__realNames = {};
+const colL = (c) => { let s=''; c++; while(c>0){const m=(c-1)%26; s=String.fromCharCode(65+m)+s; c=Math.floor((c-1)/26);} return s; };
+
+async function loadWorkbook() {
+  return Excel.run(async (ctx) => {
+    const sheets = ctx.workbook.worksheets;
+    sheets.load('items/name');
+    await ctx.sync();
+    const wb = { SheetNames: sheets.items.map(s => s.name), Sheets: {} };
+    window.__realNames = {};
+    const wanted = ['data','tableaux','index','commentaires'];
+    for (const sh of sheets.items) {
+      const low = sh.name.toLowerCase();
+      if (!wanted.includes(low)) continue;
+      window.__realNames[low.toUpperCase()] = sh.name;
+      const ur = sh.getUsedRangeOrNullObject(true);
+      ur.load('rowIndex,columnIndex,rowCount,columnCount,isNullObject');
+      await ctx.sync();
+      const ws = {};
+      if (ur.isNullObject) { ws['!ref'] = 'A1:A1'; wb.Sheets[sh.name] = ws; continue; }
+      const r0 = ur.rowIndex, c0 = ur.columnIndex, nR = ur.rowCount, nC = ur.columnCount;
+      const chunk = Math.max(1, Math.floor(60000 / nC));
+      for (let off = 0; off < nR; off += chunk) {
+        const n = Math.min(chunk, nR - off);
+        const rg = sh.getRangeByIndexes(r0 + off, c0, n, nC);
+        rg.load('values,valueTypes');
+        await ctx.sync();
+        for (let i = 0; i < n; i++) for (let j = 0; j < nC; j++) {
+          const t = rg.valueTypes[i][j]; const v = rg.values[i][j];
+          if (t === 'Empty' || v === '' || v === null) continue;
+          const addr = colL(c0 + j) + (r0 + off + i + 1);
+          ws[addr] = { v, t: t === 'Error' ? 'e' : t === 'Double' ? 'n' : t === 'Boolean' ? 'b' : 's' };
+        }
+      }
+      ws['!ref'] = colL(c0) + (r0 + 1) + ':' + colL(c0 + nC - 1) + (r0 + nR);
+      wb.Sheets[sh.name] = ws;
+    }
+    return wb;
+  });
+}
+
+async function goTo(sec, target) {
+  const name = window.__realNames[sec === 'TOP10' ? 'DATA' : sec];
+  if (!name) return;
+  try {
+    await Excel.run(async (ctx) => {
+      const ws = ctx.workbook.worksheets.getItem(name);
+      ws.activate();
+      const rg = target.row ? ws.getRange(target.row + ':' + target.row) : ws.getRange(target.addr);
+      rg.select();
+      await ctx.sync();
+    });
+  } catch (e) { console.error(e); }
+}
+
+const linkify = (html, sec, id) => {
+  let out = html.replace(/([Ll]ignes?\s*(?::\s*)?)((?:\d+(?:,\s*)?)+)/g, (m, a, b) =>
+    a + b.split(/,\s*/).filter(Boolean).map(n => `<a class="rl" data-sec="${sec}" data-row="${n}">${n}</a>`).join(', '));
+  if (id === 'c28') out = out.replace(/\b([A-Z]{1,3}\d+)\b/g, (m) => `<a class="rl" data-sec="TABLEAUX" data-addr="${m}">${m}</a>`);
+  return out;
+};
+
+function PivotVerifier() {
+  const [results, setResults] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const [info, setInfo] = useState(null);
+  const [openS, setOpenS] = useState(new Set(['DATA','TABLEAUX','INDEX','Rappels']));
+  const [ckd, setCkd] = useState(new Set());
+  const [showHelp, setShowHelp] = useState(false);
+
+  const run = async () => {
+    setBusy(true); setErr('');
+    await new Promise(r => setTimeout(r, 60));
+    try {
+      const wb = await loadWorkbook();
+      const dsn = wb.SheetNames.find(s => s.toLowerCase() === 'data');
+      setInfo({
+        sheets: EXP.map(ex => ({ ex, found: !!wb.SheetNames.find(s => s.toLowerCase() === ex.toLowerCase()) })),
+        rows: dsn ? gR(wb.Sheets[dsn], 2).length : 0
+      });
+      setResults(analyze(wb));
+    } catch (e) {
+      setErr("Impossible de lire le classeur : " + (e && e.message ? e.message : e) + " — ce volet doit être ouvert depuis Excel.");
+    }
+    setBusy(false);
+  };
+
+  useEffect(() => { run(); }, []);
+
+  const toggleS = (k) => setOpenS(prev => { const n = new Set(prev); n.has(k) ? n.delete(k) : n.add(k); return n; });
+  const toggleCk = (id) => setCkd(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const onReportClick = (e) => {
+    const a = e.target.closest && e.target.closest('[data-sec]');
+    if (!a) return;
+    goTo(a.dataset.sec, a.dataset.row ? { row: a.dataset.row } : { addr: a.dataset.addr });
+  };
+
+  const warns = results.filter(r => r.st === 'w');
+  const doneCount = warns.filter(w => ckd.has(w.id)).length;
+  const t10R = results.find(r => r.id === 'c27');
+  const t10ER = results.find(r => r.id === 'c27b');
+  const SECS = [{k:'DATA',l:'📊 Données (DATA)'},{k:'TABLEAUX',l:'📋 Tableaux'},{k:'INDEX',l:'📁 Index'},{k:'Rappels',l:'ℹ️ Rappels'}];
+  const ciStyle = (st) => ({display:'flex',alignItems:'flex-start',gap:'.5rem',padding:'.5rem .6rem',borderRadius:7,marginBottom:'.35rem',fontSize:'.82rem',lineHeight:'1.5',background:st==='w'?'#fff7ed':st==='ok'?'#f0fdf4':'#f0f9ff',border:'1px solid '+(st==='w'?'#fed7aa':st==='ok'?'#bbf7d0':'#bae6fd')});
+
+  return (
+    <div style={{fontFamily:"-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif",background:'#f0f4f8',minHeight:'100vh',padding:'.75rem .7rem',color:'#1e293b'}}>
+      {busy && (
+        <div style={{position:'fixed',inset:0,background:'rgba(15,23,42,0.45)',zIndex:2000,display:'flex',alignItems:'center',justifyContent:'center'}}>
+          <div style={{background:'#fff',borderRadius:14,padding:'1.5rem 2rem',textAlign:'center'}}>
+            <div style={{width:40,height:40,border:'4px solid #e2e8f0',borderTop:'4px solid #2563eb',borderRadius:'50%',animation:'spin .9s linear infinite',margin:'0 auto .9rem'}}></div>
+            <div style={{fontWeight:700}}>Analyse du classeur…</div>
+          </div>
+        </div>
+      )}
+      {showHelp && (
+        <div style={{position:'fixed',inset:0,background:'rgba(15,23,42,0.5)',zIndex:2000,padding:'1rem',display:'flex',alignItems:'center'}} onClick={() => setShowHelp(false)}>
+          <div style={{background:'#fff',borderRadius:12,padding:'1.25rem',fontSize:'.85rem',lineHeight:1.65}} onClick={e => e.stopPropagation()}>
+            <div style={{fontWeight:800,marginBottom:'.6rem'}}>📖 Mode d'emploi</div>
+            <ol style={{paddingLeft:'1.2rem',margin:0}}>
+              <li>L'analyse porte sur le classeur actuellement ouvert (onglets DATA, TABLEAUX, INDEX, Commentaires).</li>
+              <li>Cliquez sur un numéro de ligne dans le rapport pour la sélectionner dans Excel.</li>
+              <li>Corrigez dans le classeur, puis cliquez sur <strong>↻ Relancer</strong>.</li>
+              <li>Cochez les corrections dans la checklist au fil de l'eau.</li>
+            </ol>
+            <div style={{marginTop:'.8rem',color:'#1e40af',background:'#eff6ff',borderRadius:8,padding:'.5rem .7rem'}}>💡 Tout se passe dans Excel : aucune donnée n'est envoyée à un serveur.</div>
+            <button onClick={() => setShowHelp(false)} style={{marginTop:'.8rem',padding:'.35rem .9rem',border:'1px solid #e2e8f0',borderRadius:6,background:'#f1f5f9',cursor:'pointer'}}>Fermer</button>
+          </div>
+        </div>
+      )}
+
+      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:'.4rem',marginBottom:'.6rem'}}>
+        <h1 style={{fontSize:'1.05rem',fontWeight:800,margin:0}}>🔍 Vérificateur Pivot</h1>
+        <div style={{display:'flex',gap:'.35rem'}}>
+          <button onClick={run} disabled={busy} style={{padding:'.35rem .65rem',background:'#2563eb',color:'#fff',border:'none',borderRadius:7,fontSize:'.78rem',fontWeight:700,cursor:'pointer'}}>↻ Relancer</button>
+          <button onClick={() => setShowHelp(true)} style={{padding:'.35rem .6rem',background:'#eff6ff',color:'#2563eb',border:'1px solid #bfdbfe',borderRadius:7,fontSize:'.78rem',fontWeight:700,cursor:'pointer'}}>❓</button>
+        </div>
+      </div>
+
+      {err && <div style={{background:'#fef2f2',border:'1px solid #fca5a5',color:'#b91c1c',borderRadius:8,padding:'.6rem .75rem',fontSize:'.82rem',marginBottom:'.7rem'}}>⚠️ {err}</div>}
+
+      {info && (
+        <div style={{background:'#fff',border:'1px solid #e2e8f0',borderRadius:9,padding:'.6rem .75rem',marginBottom:'.7rem',fontSize:'.8rem'}}>
+          <div style={{marginBottom:'.3rem'}}><strong>{info.rows}</strong> lignes de données dans DATA</div>
+          <div style={{display:'flex',flexWrap:'wrap',gap:'.25rem'}}>
+            {info.sheets.map(({ex,found}) => (
+              <span key={ex} style={{padding:'.08rem .45rem',borderRadius:20,fontSize:'.72rem',fontWeight:600,background:found?'#dcfce7':'#fee2e2',color:found?'#16a34a':'#dc2626',border:'1px solid '+(found?'#86efac':'#fca5a5')}}>{found?'✓':'✗'} {ex}</span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div onClick={onReportClick}>
+        {results.length > 0 && <>
+          {warns.length > 0 ? (
+            <div style={{background:'linear-gradient(135deg,#fef2f2,#fff7ed)',border:'2px solid #fca5a5',borderRadius:10,padding:'.8rem .9rem',marginBottom:'.9rem'}}>
+              <div style={{color:'#dc2626',fontWeight:700,marginBottom:'.5rem',fontSize:'.92rem'}}>⚠️ Points critiques ({warns.length})</div>
+              {warns.map(w => (
+                <div key={w.id} style={{display:'flex',gap:'.4rem',padding:'.3rem 0',fontSize:'.8rem',borderBottom:'1px solid #fee2e2'}}>
+                  <span>⚠️</span><span style={{flex:1}}>{w.lb}</span>
+                  <a href={'#'+w.id} style={{color:'#dc2626',fontSize:'.72rem',whiteSpace:'nowrap'}}>détail ↓</a>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div style={{background:'#f0fdf4',border:'2px solid #86efac',borderRadius:10,padding:'.8rem .9rem',color:'#16a34a',fontWeight:700,marginBottom:'.9rem',fontSize:'.88rem'}}>
+              ✅ Aucun point critique détecté. Le pivot est prêt.
+            </div>
+          )}
+
+          {SECS.map(sec => {
+            const sr = results.filter(r => r.sec === sec.k && r.id !== 'c27' && r.id !== 'c27b');
+            if (!sr.length) return null;
+            const wc = sr.filter(r => r.st === 'w').length;
+            const isOpen = openS.has(sec.k);
+            return (
+              <div key={sec.k} style={{border:'1px solid #e2e8f0',borderRadius:10,overflow:'hidden',marginBottom:'.7rem',background:'#fff'}}>
+                <div onClick={() => toggleS(sec.k)} style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'.6rem .8rem',background:'#f8fafc',cursor:'pointer',userSelect:'none'}}>
+                  <div style={{display:'flex',alignItems:'center',gap:'.4rem',fontWeight:700,fontSize:'.88rem'}}>
+                    {sec.l}{wc > 0 && <span style={{background:'#fef2f2',color:'#dc2626',border:'1px solid #fca5a5',padding:'.05rem .4rem',borderRadius:20,fontSize:'.68rem',fontWeight:800}}>⚠️ {wc}</span>}
+                  </div>
+                  <span style={{transition:'transform .2s',transform:isOpen?'rotate(180deg)':'none',color:'#94a3b8'}}>▼</span>
+                </div>
+                {isOpen && <div style={{padding:'.6rem .7rem'}}>
+                  {sr.map(r => (
+                    <div key={r.id} id={r.id} style={ciStyle(r.st)}>
+                      <span style={{flexShrink:0}}>{r.st==='w'?'⚠️':r.st==='ok'?'✅':'ℹ️'}</span>
+                      <div style={{minWidth:0,overflowX:'auto'}}>
+                        <div style={{fontWeight:700,marginBottom:'.1rem',color:r.st==='w'?'#c2410c':r.st==='ok'?'#15803d':'#0369a1'}}>{r.lb}</div>
+                        <div style={{color:'#475569',wordBreak:'break-word'}} dangerouslySetInnerHTML={{__html: linkify(r.msg, r.sec, r.id)}}/>
+                      </div>
+                    </div>
+                  ))}
+                </div>}
+              </div>
+            );
+          })}
+
+          {t10R && t10R.t10 && Object.keys(t10R.t10).length > 0 && (
+            <div style={{border:'1px solid #e2e8f0',borderRadius:10,overflow:'hidden',marginBottom:'.7rem',background:'#fff'}}>
+              <div onClick={() => toggleS('TOP10')} style={{display:'flex',justifyContent:'space-between',padding:'.6rem .8rem',background:'#f8fafc',cursor:'pointer',userSelect:'none'}}>
+                <div style={{fontWeight:700,fontSize:'.88rem'}}>🏆 Top 10 par visibilité</div>
+                <span style={{transform:openS.has('TOP10')?'rotate(180deg)':'none',color:'#94a3b8'}}>▼</span>
+              </div>
+              {openS.has('TOP10') && <div style={{padding:'.6rem .7rem',overflowX:'auto'}}><T10Table t10Ref={t10R} isEng={false}/></div>}
+            </div>
+          )}
+          {t10ER && t10ER.t10 && Object.keys(t10ER.t10).length > 0 && (
+            <div style={{border:'1px solid #e2e8f0',borderRadius:10,overflow:'hidden',marginBottom:'.7rem',background:'#fff'}}>
+              <div onClick={() => toggleS('TOP10ENG')} style={{display:'flex',justifyContent:'space-between',padding:'.6rem .8rem',background:'#f8fafc',cursor:'pointer',userSelect:'none'}}>
+                <div style={{fontWeight:700,fontSize:'.88rem'}}>🔥 Top 10 par engagement</div>
+                <span style={{transform:openS.has('TOP10ENG')?'rotate(180deg)':'none',color:'#94a3b8'}}>▼</span>
+              </div>
+              {openS.has('TOP10ENG') && <div style={{padding:'.6rem .7rem',overflowX:'auto'}}>
+                <div style={{fontSize:'.75rem',color:'#64748b',marginBottom:'.6rem'}}>Social Actions si disponible, sinon likes + commentaires (hors websites / story).</div>
+                <T10Table t10Ref={t10ER} isEng={true}/>
+              </div>}
+            </div>
+          )}
+
+          {warns.length > 0 && (
+            <div style={{background:'#fff',borderRadius:12,boxShadow:'0 2px 10px rgba(0,0,0,.07)',padding:'.9rem',marginBottom:'1rem'}}>
+              <div style={{fontWeight:800,fontSize:'.95rem',marginBottom:'.4rem'}}>✅ Checklist des corrections</div>
+              <div style={{fontSize:'.8rem',color:'#64748b',marginBottom:'.7rem'}}><strong style={{color:'#2563eb'}}>{doneCount} / {warns.length}</strong> confirmées</div>
+              {warns.map(w => (
+                <div key={w.id} style={{display:'flex',alignItems:'center',gap:'.5rem',padding:'.45rem .55rem',borderRadius:7,marginBottom:'.3rem',border:'1px solid '+(ckd.has(w.id)?'#bbf7d0':'#fed7aa'),background:ckd.has(w.id)?'#f0fdf4':'#fff7ed'}}>
+                  <input type="checkbox" checked={ckd.has(w.id)} onChange={() => toggleCk(w.id)} style={{accentColor:'#16a34a',flexShrink:0}}/>
+                  <label onClick={() => toggleCk(w.id)} style={{flex:1,fontSize:'.78rem',cursor:'pointer',color:ckd.has(w.id)?'#16a34a':'#1e293b',textDecoration:ckd.has(w.id)?'line-through':'none'}}>{w.lb}</label>
+                  <a href={'#'+w.id} style={{fontSize:'.7rem',color:'#2563eb',whiteSpace:'nowrap'}}>détail ↑</a>
+                </div>
+              ))}
+              {doneCount === warns.length && (
+                <div style={{background:'#f0fdf4',border:'2px solid #86efac',borderRadius:8,padding:'.6rem .75rem',color:'#16a34a',fontWeight:700,marginTop:'.7rem',fontSize:'.82rem'}}>
+                  ✅ Tout est confirmé — cliquez sur ↻ Relancer pour vérifier le classeur corrigé.
+                </div>
+              )}
+            </div>
+          )}
+        </>}
+      </div>
+    </div>
+  );
+}
+
+Office.onReady(() => {
+  ReactDOM.createRoot(document.getElementById('root')).render(<PivotVerifier />);
+});
+
+  </script>
+</body>
+</html>
