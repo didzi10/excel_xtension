@@ -151,12 +151,12 @@ function aData(ws,cWs,res){
   if(VC!==-1&&PC!==-1){const ytR=rows.filter(r=>isP(cs(r.d[PC]),'youtube','tiktok'));const miss=ytR.filter(r=>cn(r.d[VC])===null);if(miss.length){const g=gBP(miss,PC);pp(res,'DATA','c7','w','Vues YouTube/TikTok manquantes',`${miss.length} ligne${miss.length>1?'s':''} sans vues :<br>${fG(g)}`);}else if(ytR.length)pp(res,'DATA','c7','ok','Vues YouTube/TikTok — complètes',`Toutes les lignes YouTube/TikTok (${ytR.length}) ont des vues.`);else pp(res,'DATA','c7','i','Vues YouTube/TikTok — aucune ligne','Aucune ligne YouTube ou TikTok.');}
   else pp(res,'DATA','c7','i','Vues YouTube/TikTok — impossible','Colonnes "vues" ou "plateforme" introuvables.');
 
-  if(LKC!==-1&&CMC!==-1&&PC!==-1){const excl=['story','twitch'];const elig=rows.filter(r=>{const p=nP(cs(r.d[PC]));return!excl.includes(p)&&p!=='';});const mL=elig.filter(r=>cn(r.d[LKC])===null);const mC=elig.filter(r=>cn(r.d[CMC])===null);const is=[];if(mL.length){const g=gBP(mL,PC);is.push(`<strong>Likes manquants</strong> (${mL.length} lignes) :<br>${fG(g)}`);}if(mC.length){const g=gBP(mC,PC);is.push(`<strong>Comments manquants</strong> (${mC.length} lignes) :<br>${fG(g)}`);}is.length?pp(res,'DATA','c8','w','Likes et Commentaires manquants',is.join('<br><br>')):pp(res,'DATA','c8','ok','Likes et Commentaires — complets','Toutes les valeurs sont renseignées.');}
+  if(LKC!==-1&&CMC!==-1&&PC!==-1){const excl=['story','twitch','websites'];const elig=rows.filter(r=>{const p=nP(cs(r.d[PC]));return!excl.includes(p)&&p!=='';});const mL=elig.filter(r=>cn(r.d[LKC])===null);const mC=elig.filter(r=>cn(r.d[CMC])===null);const is=[];if(mL.length){const g=gBP(mL,PC);is.push(`<strong>Likes manquants</strong> (${mL.length} lignes) :<br>${fG(g)}`);}if(mC.length){const g=gBP(mC,PC);is.push(`<strong>Comments manquants</strong> (${mC.length} lignes) :<br>${fG(g)}`);}is.length?pp(res,'DATA','c8','w','Likes et Commentaires manquants',is.join('<br><br>')):pp(res,'DATA','c8','ok','Likes et Commentaires — complets','Toutes les valeurs sont renseignées.');}
   else pp(res,'DATA','c8','i','Likes/Comments — impossible','Colonnes "likes", "comments" ou "plateforme" introuvables.');
 
   if(LKC!==-1&&PC!==-1){const igR=rows.filter(r=>isP(cs(r.d[PC]),'instagram'));const hid=igR.filter(r=>{const v=cn(r.d[LKC]);return v===null||v===-1;});if(hid.length)pp(res,'DATA','c9','w','Engagement caché Instagram non corrigé',`Attention, ${hid.length} post${hid.length>1?'s':''} Instagram avec engagement caché non corrigé${hid.length>1?'s':''} (likes = -1 ou vide) — lignes : ${fL(hid.map(r=>r.er))}`);else if(igR.length)pp(res,'DATA','c9','ok','Engagement caché Instagram — OK','Aucun post Instagram avec engagement caché non corrigé.');else pp(res,'DATA','c9','i','Engagement Instagram — aucune ligne','Aucune ligne Instagram.');}
 
-  if(SOAC!==-1&&PC!==-1){const e=rows.filter(r=>cn(r.d[SOAC])===null);if(e.length){const g=gBP(e,PC);pp(res,'DATA','c10','w','Social Actions — valeurs manquantes',`${e.length} ligne${e.length>1?'s':''} sans "Social Actions" :<br>${fG(g)}`);}else pp(res,'DATA','c10','ok','Social Actions — complet','Toutes les valeurs "Social Actions" sont renseignées.');}
+  if(SOAC!==-1&&PC!==-1){const e=rows.filter(r=>{const p=nP(cs(r.d[PC]));return p!=='story'&&p!=='websites'&&cn(r.d[SOAC])===null;});if(e.length){const g=gBP(e,PC);pp(res,'DATA','c10','w','Social Actions — valeurs manquantes',`${e.length} ligne${e.length>1?'s':''} sans "Social Actions" :<br>${fG(g)}`);}else pp(res,'DATA','c10','ok','Social Actions — complet','Toutes les valeurs "Social Actions" sont renseignées.');}
   else pp(res,'DATA','c10','i','Social Actions — impossible','Colonne "Social Actions" introuvable.');
 
   if(OEC!==-1){const valid=['owned','paid','earned'];const inv=[],bCase=[];for(const r of rows){const v=cs(r.d[OEC]);if(!v||!valid.includes(v.toLowerCase().trim()))inv.push(r);else if(v.trim()!==v.toLowerCase().trim())bCase.push(r);}const is=[];if(inv.length){const g=gBP(inv,PC);is.push(`Valeurs invalides/manquantes (${inv.length} lignes) :<br>${fG(g)}`);}if(bCase.length)is.push(`Incohérence de casse dans owned/paid/earned — uniformiser en minuscules. (${bCase.length} ligne${bCase.length>1?'s':''})`);is.length?pp(res,'DATA','c11','w','owned/paid/earned — incohérences',is.join('<br><br>')):pp(res,'DATA','c11','ok','owned/paid/earned — conforme','Toutes les valeurs sont en minuscules.');}
@@ -346,7 +346,7 @@ function aExtra(wb,res){
 
   // c44 — engagement > visibilité
   if(VISC!==-1&&PC!==-1&&(SOAC!==-1||(LKC!==-1&&CMC!==-1))){
-    const bad=rows.filter(r=>{const p=nP(cs(r.d[PC]));if(!p||p==='websites'||p==='story')return false;const vis=cn(r.d[VISC]);if(vis===null||vis<=0)return false;const so=SOAC!==-1?cn(r.d[SOAC]):null;const eng=so!==null?so:((LKC!==-1?cn(r.d[LKC])||0:0)+(CMC!==-1?cn(r.d[CMC])||0:0));return eng>vis;});
+    const bad=rows.filter(r=>{const p=nP(cs(r.d[PC]));if(!p||p==='websites'||p==='story')return false;const vis=cn(r.d[VISC]);if(vis===null||vis<=0)return false;const so=SOAC!==-1?cn(r.d[SOAC]):null;const eng=SOAC!==-1?(so||0):((LKC!==-1?cn(r.d[LKC])||0:0)+(CMC!==-1?cn(r.d[CMC])||0:0));return eng>vis;});
     if(bad.length){const gg=gBP(bad,PC);pp(res,'DATA','c44','w',`Engagement supérieur à la visibilité (${bad.length})`,`${bad.length} ligne${bad.length>1?'s':''} où l'engagement dépasse la visibilité :<br>${fG(gg)}`);}
     else pp(res,'DATA','c44','ok','Engagement / visibilité — cohérents','Aucun post avec plus d\'engagement que de visibilité.');}
 
@@ -404,7 +404,7 @@ function aExtra(wb,res){
       const key=p+'|'+o+'|'+bb.join(',');const e2=mp[key]||(mp[key]={p,o,b:bb,n:0,vis:0});e2.n++;
       const vis=VISC!==-1?cn(r.d[VISC]):null;if(vis!==null)e2.vis+=vis;
       const so=SOAC!==-1?cn(r.d[SOAC]):null;
-      const eng=so!==null?so:((LKC!==-1?cn(r.d[LKC])||0:0)+(CMC!==-1?cn(r.d[CMC])||0:0));
+      const eng=SOAC!==-1?(so||0):((LKC!==-1?cn(r.d[LKC])||0:0)+(CMC!==-1?cn(r.d[CMC])||0:0));
       const dcell=DC!==-1?r.d[DC]:null;const d=dcell&&typeof dcell.v==='number'?dcell.v:null;
       const cc=cats.map(k=>{const cell=r.d[k.c];if(!cell||cell.v===undefined||cell.v===null||cell.v==='')return -1;const key=cell.t==='n'?String(cell.v):String(cell.v).trim();const i=k.map.get(key);return i===undefined?-1:i;});
       items.push({er:r.er,p,o,vis,eng,eq:EQC!==-1?(cn(r.d[EQC])||0):0,dep:DEPC!==-1?(cn(r.d[DEPC])||0):0,d,mk:mkOf(d),acc:CC!==-1?cs(r.d[CC]):null,c:cc,url:UC!==-1?cs(r.d[UC]):null,idp:IDPC!==-1?cs(r.d[IDPC]):null,b:bb});
@@ -905,11 +905,19 @@ function AnalyseTab(p){
     h(Group,{title:'🏆 Top '+TOPN+' par visibilité'+(on?' — FILTRÉ : '+brand:''),accent:on?'#dc2626':null,count:Object.keys(topsBy(rowsA,false,-1)).length,open:openT.has('v'),onToggle:()=>flipT('v')},
       h('div',{style:{background:'#fff',borderRadius:8,padding:8,overflowX:'auto'}},
         h('div',{style:{fontSize:'.72rem',color:'#64748b',marginBottom:6}},'Sur la période affichée ('+labA+').'),
-        h(TopTable,{items:rowsA,isEng:false,bi:-1,hasSOA:tops.hasSOA}))),
+        h(TopTable,{items:rowsA,isEng:false,bi:-1,hasSOA:tops.hasSOA,onToast}))),
     h(Group,{title:'🔥 Top '+TOPN+' par engagement'+(on?' — FILTRÉ : '+brand:''),accent:on?'#dc2626':null,count:Object.keys(topsBy(rowsA,true,-1)).length,open:openT.has('e'),onToggle:()=>flipT('e')},
       h('div',{style:{background:'#fff',borderRadius:8,padding:8,overflowX:'auto'}},
-        h('div',{style:{fontSize:'.72rem',color:'#64748b',marginBottom:6}},'Sur la période affichée ('+labA+'). Social Actions si disponible, sinon likes + commentaires (hors websites et stories).'),
-        h(TopTable,{items:rowsA,isEng:true,bi:-1,hasSOA:tops.hasSOA}))));
+        h('div',{style:{fontSize:'.72rem',color:'#64748b',marginBottom:6}},'Sur la période affichée ('+labA+'). Engagement = colonne Social Actions (likes + commentaires seulement si cette colonne n\'existe pas), hors websites et stories).'),
+        h(TopTable,{items:rowsA,isEng:true,bi:-1,hasSOA:tops.hasSOA,onToast}))),
+    h(Group,{title:'🌍 Top 100 cross-plateformes — visibilité'+(on?' — FILTRÉ : '+brand:''),accent:on?'#dc2626':null,count:rowsA.length?Math.min(100,rowsA.length):0,open:openT.has('xv'),onToggle:()=>flipT('xv')},
+      h('div',{style:{background:'#fff',borderRadius:8,padding:8,overflowX:'auto'}},
+        h('div',{style:{fontSize:'.72rem',color:'#64748b',marginBottom:6}},'Sur la période affichée ('+labA+').'),
+        h(TopCross,{items:rowsA,isEng:false,hasSOA:tops.hasSOA,onToast}))),
+    h(Group,{title:'🌍 Top 100 cross-plateformes — engagement'+(on?' — FILTRÉ : '+brand:''),accent:on?'#dc2626':null,count:rowsA.length?Math.min(100,rowsA.length):0,open:openT.has('xe'),onToggle:()=>flipT('xe')},
+      h('div',{style:{background:'#fff',borderRadius:8,padding:8,overflowX:'auto'}},
+        h('div',{style:{fontSize:'.72rem',color:'#64748b',marginBottom:6}},'Sur la période affichée ('+labA+').'),
+        h(TopCross,{items:rowsA,isEng:true,hasSOA:tops.hasSOA,onToast}))));
 }
 /* ═════════ Analyse : tableaux supplémentaires (calculs purs) ═════════ */
 const dTxt=(a,b)=>{const pc=pctVar(a,b);return pc===null?'—':(pc>=0?'▲ ':'▼ ')+fP(Math.abs(pc))+' %';};
@@ -1063,11 +1071,12 @@ function MonthStack(p){
 function Reliab(p){
   const r=p.rows,n=r.length;if(!n)return null;
   const pc=(f)=>r.filter(f).length/n*100;
-  const d=pc(x=>x.d!==null),v=pc(x=>x.vis>0),e=pc(x=>x.eng>0);
+  const noEng=(x)=>x.p==='story'||x.p==='websites'||x.p==='website';const re=r.filter(x=>!noEng(x));
+  const d=pc(x=>x.d!==null),v=pc(x=>x.vis>0),e=re.length?re.filter(x=>x.eng>0).length/re.length*100:100;
   const warn=d<95||v<80;
   const nd=r.filter(x=>x.d===null).length;
   return h('div',{style:{background:warn?'#fffbeb':'#f8fafc',border:'1px solid '+(warn?'#fde68a':'#e2e8f0'),borderRadius:8,padding:'5px 8px',fontSize:'.72rem',color:warn?'#92400e':'#64748b',marginBottom:10,flex:1}},
-    (warn?'⚠️ ':'')+'Fiabilité de la période : '+fP(d,0)+' % des posts ont une date, '+fP(v,0)+' % une visibilité, '+fP(e,0)+' % un engagement (> 0).'+(nd?' '+nd+' post'+(nd>1?'s':'')+' sans date : absents des graphiques mensuels.':''));
+    (warn?'⚠️ ':'')+'Fiabilité de la période : '+fP(d,0)+' % des posts ont une date, '+fP(v,0)+' % une visibilité, '+fP(e,0)+' % un engagement (hors stories et websites).'+(nd?' '+nd+' post'+(nd>1?'s':'')+' sans date : absents des graphiques mensuels.':''));
 }
 
 /* ═════════ Interface ═════════ */
@@ -1188,13 +1197,37 @@ const topsBy=(items,isEng,bi)=>{
   return out;
 };
 
+const copyUrls=(list,onToast)=>{
+  const urls=list.map(x=>safeUrl(x.url)).filter(Boolean);
+  if(!urls.length){onToast('Aucune URL exploitable dans cette liste.');return;}
+  const miss=list.length-urls.length;
+  copyText(urls.join('\n'),(ok)=>onToast(ok?urls.length+' URL'+(urls.length>1?'s':'')+' copiée'+(urls.length>1?'s':'')+' (une par ligne)'+(miss?' — '+miss+' post'+(miss>1?'s':'')+' sans URL valide ignoré'+(miss>1?'s':''):'')+'.':'Copie impossible.'));
+};
+const urlBtn=(list,onToast)=>h('button',{style:{...BTN_N,padding:'1px 7px',fontSize:'.68rem'},onClick:(e)=>{e.stopPropagation();copyUrls(list,onToast);}},'📋 Copier les URLs');
+function TopCross(p){
+  const {items,isEng,hasSOA,onToast}=p;const N=100;
+  const L=items.filter(x=>!(isEng&&(x.p==='websites'||x.p==='story'))&&(isEng?x.eng:x.vis)!==null&&(isEng?x.eng:x.vis)!==undefined).sort((a,b)=>isEng?b.eng-a.eng:b.vis-a.vis).slice(0,N);
+  const th={padding:'3px 6px',textAlign:'left',color:'#64748b',borderBottom:'1px solid #e2e8f0'},td={padding:'3px 6px',borderBottom:'1px solid #f1f5f9'};
+  if(!L.length)return h('div',{style:{color:'#64748b',fontSize:'.76rem'}},'Aucun post pour cette sélection.');
+  return h('div',null,
+    h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}},
+      h('span',{style:{fontSize:'.72rem',color:'#64748b'}},L.length+' posts, toutes plateformes confondues'+(isEng?(hasSOA?' (Social Actions)':' (likes + commentaires, faute de colonne Social Actions)')+', hors websites et stories':'')+'.'),
+      urlBtn(L,onToast)),
+    h('table',{style:{width:'100%',borderCollapse:'collapse',fontSize:'.73rem'}},
+      h('thead',null,h('tr',null,h('th',{style:th},'#'),h('th',{style:th},'Plateforme'),h('th',{style:th},'Ligne'),h('th',{style:th},'Lien'),h('th',{style:{...th,textAlign:'right'}},isEng?(hasSOA?'Social act.':'Likes+comm.'):'Visibilité'))),
+      h('tbody',null,L.map((x,i)=>{const val=isEng?x.eng:x.vis;return h('tr',{key:i},
+        h('td',{style:{...td,color:'#94a3b8'}},i+1),h('td',{style:td},x.p),
+        h('td',{style:td},h('a',{className:'rl','data-sec':'DATA','data-row':x.er},x.er)),
+        h('td',{style:td},safeUrl(x.url)?h('a',{href:safeUrl(x.url),target:'_blank',rel:'noreferrer',style:{color:'#2563eb'}},'ouvrir'):'—'),
+        h('td',{style:{...td,textAlign:'right',fontWeight:700}},val!==null&&val!==undefined?val.toLocaleString('fr-FR'):'—'));}))));
+}
 function TopTable(p){
-  const {items,isEng,bi,hasSOA}=p;const t10=topsBy(items,isEng,bi);
+  const {items,isEng,bi,hasSOA,onToast}=p;const t10=topsBy(items,isEng,bi);
   const th={padding:'3px 6px',textAlign:'left',color:'#64748b',borderBottom:'1px solid #e2e8f0'},td={padding:'3px 6px',borderBottom:'1px solid #f1f5f9'};
   const pls=Object.keys(t10);
   if(!pls.length)return h('div',{style:{color:'#64748b',fontSize:'.76rem'}},'Aucun post pour cette sélection.');
   return h('div',null,pls.map(pl=>h('div',{key:pl,style:{marginBottom:10}},
-    h('div',{style:{fontWeight:700,fontSize:'.8rem',color:isEng?'#7e22ce':'#1e40af',background:isEng?'#fdf4ff':'#eff6ff',padding:'4px 8px',borderRadius:'6px 6px 0 0'}},pl+(STD.includes(pl)?'':'  (plateforme non standard)')),
+    h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',fontWeight:700,fontSize:'.8rem',color:isEng?'#7e22ce':'#1e40af',background:isEng?'#fdf4ff':'#eff6ff',padding:'4px 8px',borderRadius:'6px 6px 0 0'}},h('span',null,pl+(STD.includes(pl)?'':'  (plateforme non standard)')),onToast?urlBtn(t10[pl],onToast):null),
     h('table',{style:{width:'100%',borderCollapse:'collapse',fontSize:'.73rem'}},
       h('thead',null,h('tr',null,h('th',{style:th},'#'),h('th',{style:th},'Ligne'),h('th',{style:th},'ID page'),h('th',{style:th},'Lien'),h('th',{style:{...th,textAlign:'right'}},isEng?(hasSOA?'Social act.':'Likes+comm.'):'Visibilité'))),
       h('tbody',null,t10[pl].map((x,i)=>{
