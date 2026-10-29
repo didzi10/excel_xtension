@@ -56,22 +56,31 @@ function bCM(ws) {
   }
   return m;
 }
-const gc = (m,...ns) => { for(const n of ns){const k=n.toLowerCase().trim();if(m[k]!==undefined)return m[k];} return -1; };
+const COL_ALIASES={'plateforme':['social_media'],'id post':['post_id'],'id_post':['post_id'],'url':['post_url'],'id page':['author_id'],'id_page':['author_id'],'compte ou requête':['compte','account_name'],'compte ou requete':['compte','account_name'],'social actions':['engagements'],'social_actions':['engagements'],'équivalent média':['emv net/ratio'],'equivalent media':['emv net/ratio']};
+const gc = (m,...ns) => { for(const n of ns){const k=n.toLowerCase().trim();if(m[k]!==undefined)return m[k];} for(const n of ns){const al=COL_ALIASES[n.toLowerCase().trim()];if(al)for(const a of al){if(m[a]!==undefined)return m[a];}} return -1; };
 const gcAll = (m,...ns) => { const res=[]; for(let c=m._mnC;c<=m._mxC;c++){const h=m['_h'+c];if(!h)continue;const hk=h.toLowerCase().trim();for(const n of ns){if(hk===n.toLowerCase().trim()){res.push(c);break;}}} return res; };
 
 const __GRC=new WeakMap(),__CN=[];
 const __cn=(c)=>__CN[c]||(__CN[c]=(()=>{let s='',n=c+1;while(n>0){const k=(n-1)%26;s=String.fromCharCode(65+k)+s;n=Math.floor((n-1)/26);}return s;})());
+const __cellAt=(ws,ri,c)=>{const g=ws['!grid'];if(g){const rw=g[ri-g.r0];return rw?rw[c]:undefined;}return ws[__cn(c)+(ri+1)];};
 function gR(ws, from) {
   let m=__GRC.get(ws);if(!m){m={};__GRC.set(ws,m);}
   const ck=from+'|'+CONFIG.maxEmptyRows;if(m[ck])return m[ck];
   const r=X().utils.decode_range(ws['!ref']||'A1:A1');
   const rows=[]; let consec=0; const c0=r.s.c,c1=r.e.c,L=[];for(let c=c0;c<=c1;c++)L[c]=__cn(c);
+  const g=ws['!grid'];
   for(let ri=from;ri<=r.e.r;ri++){
-    let any=false; const d={}; const rn=ri+1;
-    for(let c=c0;c<=c1;c++){
-      const cell=ws[L[c]+rn];
-      d[c]=cell||null;
-      if(cell&&cell.v!==undefined&&cell.v!==null&&cell.v!=='')any=true;
+    let any=false; const rn=ri+1; let d;
+    if(g){
+      const rw=g[ri-g.r0];
+      if(rw){d=rw;for(let c=c0;c<=c1;c++){const cell=rw[c];if(cell&&cell.v!==undefined&&cell.v!==null&&cell.v!==''){any=true;break;}}}
+    }else{
+      d={};
+      for(let c=c0;c<=c1;c++){
+        const cell=ws[L[c]+rn];
+        d[c]=cell||null;
+        if(cell&&cell.v!==undefined&&cell.v!==null&&cell.v!=='')any=true;
+      }
     }
     if(any){consec=0;rows.push({ri,er:rn,d});}
     else{consec++;if(consec>=CONFIG.maxEmptyRows)break;}
@@ -124,8 +133,8 @@ function aData(ws,cWs,res){
   else{const e=rows.filter(r=>!r.d[DC]||r.d[DC].v===undefined||r.d[DC].v===null||r.d[DC].v==='');e.length?pp(res,'DATA','c3','w',`Date — ${e.length} valeur(s) manquante(s)`,`Dates manquantes — lignes : ${fL(e.map(r=>r.er))}`):pp(res,'DATA','c3','ok','Date — complète','Toutes les dates sont renseignées.');}
 
   const fcs=[{n:'mois',c:MoC},{n:'jour',c:JC},{n:'semestre',c:SC},{n:'année',c:AC},{n:'RT (TW)',c:RTC},{n:'Reply (TW)',c:RPC}];
-  const fM=[],fI=[];
-  for(const fc of fcs){if(fc.c===-1){fM.push(fc.n);}else{const e=rows.filter(r=>!r.d[fc.c]||r.d[fc.c].v===undefined||r.d[fc.c].v===null||r.d[fc.c].v==='');if(e.length)fI.push(`<strong>${fc.n}</strong> : ${e.length} cellule${e.length>1?'s vides':' vide'} — lignes : ${fL(e.map(r=>r.er))}`);}}
+  const fM=[],fI=[];const legacyTW=gc(m,'is_retweet','is_reply')!==-1;
+  for(const fc of fcs){if(fc.c===-1&&legacyTW&&(fc.n==='RT (TW)'||fc.n==='Reply (TW)'))continue;if(fc.c===-1){fM.push(fc.n);}else{const e=rows.filter(r=>!r.d[fc.c]||r.d[fc.c].v===undefined||r.d[fc.c].v===null||r.d[fc.c].v==='');if(e.length)fI.push(`<strong>${fc.n}</strong> : ${e.length} cellule${e.length>1?'s vides':' vide'} — lignes : ${fL(e.map(r=>r.er))}`);}}
   if(fM.length||fI.length){let msg='';if(fM.length)msg+=`Colonnes introuvables : ${fM.join(', ')}<br>`;if(fI.length)msg+=`Formules non étendues :<br>${fI.join('<br>')}`;pp(res,'DATA','c4','w','Colonnes à formule — non étendues',msg);}
   else pp(res,'DATA','c4','ok','Colonnes à formule — toutes étendues','mois, jour, semestre, année, RT (TW), Reply (TW) renseignées sur toutes les lignes.');
 
@@ -198,7 +207,7 @@ function aData(ws,cWs,res){
 
   {const dI=[];if(IC!==-1){const mp={};for(const r of rows){const v=cs(r.d[IC]);if(!v)continue;(mp[v]=mp[v]||[]).push(r);}const dups=Object.entries(mp).filter(([,v])=>v.length>1);if(dups.length){const bp={};let totalRowsI=0;for(const [,rr] of dups)for(const r of rr){const p=nP(cs(r.d[PC]));bp[p]=(bp[p]||0)+1;totalRowsI++;}const ps=Object.entries(bp).map(([p,c])=>`${p} : ${c} ligne${c>1?'s':''}`).join(', ');const exI=dups.slice(0,3).map(([v,rr])=>`"${String(v).length>50?String(v).substring(0,47)+'…':v}" (lignes ${rr.map(r=>r.er).join(', ')})`).join(' ; ');dI.push(`<strong>Doublons ID Post</strong> : ${dups.length} valeur${dups.length>1?'s':''} dupliquée${dups.length>1?'s':''} → ${totalRowsI} lignes affectées au total — risque de double comptage.<br>Lignes affectées par plateforme : ${ps}<br><em>Exemples : ${exI}${dups.length>3?' …':''}</em>`);}}if(UC!==-1){const mu={};for(const r of rows){const v=cs(r.d[UC]);if(!v)continue;(mu[v]=mu[v]||[]).push(r);}const dups=Object.entries(mu).filter(([,v])=>v.length>1);if(dups.length){const bp={};let totalRowsU=0;for(const [,rr] of dups)for(const r of rr){const p=nP(cs(r.d[PC]));bp[p]=(bp[p]||0)+1;totalRowsU++;}const ps=Object.entries(bp).map(([p,c])=>`${p} : ${c} ligne${c>1?'s':''}`).join(', ');const exU=dups.slice(0,3).map(([v,rr])=>`"${String(v).length>70?String(v).substring(0,67)+'…':v}" (lignes ${rr.map(r=>r.er).join(', ')})`).join(' ; ');dI.push(`<strong>Doublons URL</strong> : ${dups.length} URL${dups.length>1?'s':''} dupliquée${dups.length>1?'s':''} → ${totalRowsU} lignes affectées au total — risque de double comptage.<br>Lignes affectées par plateforme : ${ps}<br><em>Exemples : ${exU}${dups.length>3?' …':''}</em>`);}}dI.length?pp(res,'DATA','c22','w','Doublons détectés (ID Post / URL)',dI.join('<br><br>')):pp(res,'DATA','c22','ok','Doublons — aucun','Aucun doublon dans "ID Post" ni "URL".');}
 
-  if(cWs&&INDC!==-1&&DETC!==-1){const bC=[];for(let c=INDC+1;c<DETC;c++){const h=m['_h'+c];if(h&&!CONFIG.excludedBrands.includes(h.toLowerCase()))bC.push(h);}const kr=X().utils.decode_range(cWs['!ref']||'A1:A1');const cBr=[];for(let r=7;r<=kr.e.r;r++){const cell=cWs[X().utils.encode_cell({r,c:10})];const v=cs(cell);if(v)cBr.push(v);}if(!cBr.length)pp(res,'DATA','c23','i','Cohérence noms de marques — Commentaires K8+ vide','Aucune marque trouvée dans Commentaires colonne K (à partir de K8).');else{const mD=cBr.filter(b=>!bC.includes(b));const eD=bC.filter(b=>!cBr.includes(b));if(mD.length||eD.length){let msg='';if(mD.length)msg+=`Marques dans Commentaires K8+ absentes de DATA : <strong>${mD.join(', ')}</strong><br>`;if(eD.length)msg+=`Colonnes marques dans DATA absentes de Commentaires K8+ : <strong>${eD.join(', ')}</strong><br>`;msg+="Il faut modifier les noms des marques dans l'onglet Commentaires colonne K";pp(res,'DATA','c23','w','Cohérence noms de marques — incohérence',msg);}else pp(res,'DATA','c23','ok','Cohérence noms de marques — OK',`Les ${bC.length} marques correspondent entre DATA et Commentaires.`);}}
+  if(cWs&&(INDC!==-1||DETC!==-1)){const bC=brandHeaders(m).map(x=>x.name).filter(h=>!CONFIG.excludedBrands.includes(h.toLowerCase()));const kr=X().utils.decode_range(cWs['!ref']||'A1:A1');const cBr=[];for(let r=7;r<=kr.e.r;r++){const cell=cWs[X().utils.encode_cell({r,c:10})];const v=cs(cell);if(v)cBr.push(v);}if(!cBr.length)pp(res,'DATA','c23','i','Cohérence noms de marques — Commentaires K8+ vide','Aucune marque trouvée dans Commentaires colonne K (à partir de K8).');else{const lc=(a)=>a.map(x=>String(x).toLowerCase().trim());const mD=cBr.filter(b=>!lc(bC).includes(String(b).toLowerCase().trim()));const eD=bC.filter(b=>!lc(cBr).includes(String(b).toLowerCase().trim()));if(mD.length||eD.length){let msg='';if(mD.length)msg+=`Marques dans Commentaires K8+ absentes de DATA : <strong>${mD.join(', ')}</strong><br>`;if(eD.length)msg+=`Colonnes marques dans DATA absentes de Commentaires K8+ : <strong>${eD.join(', ')}</strong><br>`;msg+="Il faut modifier les noms des marques dans l'onglet Commentaires colonne K";pp(res,'DATA','c23','w','Cohérence noms de marques — incohérence',msg);}else pp(res,'DATA','c23','ok','Cohérence noms de marques — OK',`Les ${bC.length} marques correspondent entre DATA et Commentaires.`);}}
   else pp(res,'DATA','c23','i','Cohérence noms de marques — vérification partielle','Onglet Commentaires absent ou colonnes de référence introuvables.');
 
   if(SCPC!==-1){const es=rows.filter(r=>!cs(r.d[SCPC]));es.length?pp(res,'DATA','c24','w','Colonne "scope" — valeurs manquantes',`Attention, ${es.length} valeur${es.length>1?'s':''} manquante${es.length>1?'s':''} dans la colonne scope — les résultats ne remonteront pas dans l'onglet Tableaux. Lignes : ${fL(es.map(r=>r.er))}`):pp(res,'DATA','c24','ok','Colonne "scope" — complète','Toutes les valeurs scope sont renseignées.');}
@@ -364,7 +373,7 @@ function aExtra(wb,res){
 
   // c46 — données après un bloc de lignes vides (non lues)
   {const rg=X().utils.decode_range(ws['!ref']||'A1:A1');const last=rows[rows.length-1].ri;const lost=new Set();
-   for(let ri=last+CONFIG.maxEmptyRows+1;ri<=rg.e.r;ri++)for(let c=rg.s.c;c<=rg.e.c;c++){if(ws[X().utils.encode_cell({r:ri,c})]){lost.add(ri+1);break;}}
+   for(let ri=last+CONFIG.maxEmptyRows+1;ri<=rg.e.r;ri++)for(let c=rg.s.c;c<=rg.e.c;c++){if(__cellAt(ws,ri,c)){lost.add(ri+1);break;}}
    if(lost.size)pp(res,'DATA','c46','w',`Données après des lignes vides (${lost.size} ligne${lost.size>1?'s':''})`,`Après ${CONFIG.maxEmptyRows} lignes vides consécutives, l'analyse s'arrête : ces lignes ne sont pas contrôlées — lignes : ${fL([...lost])}`);}
 
   // c47 — format des URLs par plateforme (Facebook est contrôlé à part ; websites et stories exclus)
@@ -380,13 +389,7 @@ function aExtra(wb,res){
   if(PC!==-1){
     // colonnes de marque : entre « impression… » et la colonne « commentaires » (ou « detection textuelle »), puis toutes les autres colonnes
     const headers=[];for(let c=m._mnC;c<=m._mxC;c++){const hh=m['_h'+c];if(hh)headers.push({c,name:hh,low:hh.toLowerCase().trim()});}
-    const starts=headers.filter(x=>/^impression/.test(x.low));
-    let detected=[];
-    if(starts.length){
-      const st=starts.find(x=>x.low.replace('é','e')==='impression_indiquees'||x.low==='impression indiquées')||starts[starts.length-1];
-      const en=headers.find(x=>x.c>st.c&&/^(commentaires?|comments?|d[eé]tection textuelle)/.test(x.low));
-      if(en)detected=headers.filter(x=>x.c>st.c&&x.c<en.c);
-    }
+    const detected=brandHeaders(m);
     const detSet=new Set(detected.map(x=>x.c));
     const cand=detected.concat(headers.filter(x=>!detSet.has(x.c)));
     const isOn=(cell)=>{if(!cell||cell.v===undefined||cell.v===null||cell.v==='')return false;if(typeof cell.v==='number')return cell.v!==0;const s=String(cell.v).trim().toLowerCase();return !['','0','false','faux','non','no','-'].includes(s);};
@@ -422,14 +425,30 @@ function aExtra(wb,res){
 
 /* ═════════ Lecture / navigation / corrections dans Excel (Office.js) ═════════ */
 window.__realNames={};
+
+/* Colonnes de marques — gère les deux dispositions :
+   ancienne : impression_indiquées … [marques] … detection textuelle ?   ·   actuelle : detection textuelle ? [marques] … commentaire   ·   vMD : detection textuelle ? [marques] jusqu'à la dernière colonne */
+function brandHeaders(m){
+  const hs=[];for(let c=m._mnC;c<=m._mxC;c++){const hh=m['_h'+c];if(hh)hs.push({c,name:hh,low:hh.toLowerCase().trim()});}
+  const nz=(s)=>s.replace(/é/g,'e');
+  const ind=hs.find(x=>nz(x.low)==='impression_indiquees'||nz(x.low)==='impression indiquees')||hs.find(x=>/^impression/.test(x.low));
+  const det=hs.find(x=>/^d[eé]tection textuelle/.test(x.low));
+  if(ind&&det&&det.c>ind.c&&hs.some(x=>x.c>ind.c&&x.c<det.c))return hs.filter(x=>x.c>ind.c&&x.c<det.c);
+  const s=det||ind;if(!s)return [];
+  const en=hs.find(x=>x.c>s.c&&/^(commentaires?|comments?)$/.test(x.low));
+  return hs.filter(x=>x.c>s.c&&(!en||x.c<en.c)&&x!==det&&x!==ind);
+}
 const colL=(c)=>{let s='';c++;while(c>0){const k=(c-1)%26;s=String.fromCharCode(65+k)+s;c=Math.floor((c-1)/26);}return s;};
 
 async function loadWorkbook(){
   return Excel.run(async(ctx)=>{
     const sheets=ctx.workbook.worksheets;sheets.load('items/name');await ctx.sync();
     const wb={SheetNames:sheets.items.map(s=>s.name),Sheets:{}};
-    window.__realNames={};
+    window.__realNames={};window.__skipped=[];
     const wanted=['data','tableaux','index','commentaires'];
+    /* colonnes de texte libre (posts, descriptions…) : inutiles pour les contrôles et très lourdes, on ne les transfère pas (l'en-tête reste lu) */
+    const SKIP=new Set(['text','description','author_description','text_with_client_name','agreg_txt_tag_author','tagged_users','coauthor_producers','coauthor','mentions','hashtags','url_media','filename','message','commentaire','engagement_src','src_collecte']);
+    const ERR=/^#(N\/A|REF!|VALUE!|DIV\/0!|NAME\?|NULL!|NUM!|SPILL!|CALC!|GETTING_DATA)/;
     for(const sh of sheets.items){
       const low=sh.name.toLowerCase();if(!wanted.includes(low))continue;
       window.__realNames[low.toUpperCase()]=sh.name;
@@ -437,17 +456,32 @@ async function loadWorkbook(){
       const ws={};
       if(ur.isNullObject){ws['!ref']='A1:A1';wb.Sheets[sh.name]=ws;continue;}
       const r0=ur.rowIndex,c0=ur.columnIndex,nR=ur.rowCount,nC=ur.columnCount;
-      const chunk=Math.max(1,Math.floor(100000/nC));
       const CL=[];for(let j=0;j<nC;j++)CL[j]=colL(c0+j);
-      const ERR=/^#(N\/A|REF!|VALUE!|DIV\/0!|NAME\?|NULL!|NUM!|SPILL!|CALC!|GETTING_DATA)/;
-      for(let off=0;off<nR;off+=chunk){
-        const n=Math.min(chunk,nR-off);const rg=sh.getRangeByIndexes(r0+off,c0,n,nC);rg.load('values');await ctx.sync();
-        const V=rg.values;
-        for(let i=0;i<n;i++){const row=V[i],rn=r0+off+i+1;for(let j=0;j<nC;j++){
-          const v=row[j];if(v===''||v===null)continue;
-          const ty=typeof v;
-          ws[CL[j]+rn]={v,t:ty==='number'?'n':ty==='boolean'?'b':(ERR.test(v)?'e':'s')};
-        }}
+      const mkc=(v)=>{const ty=typeof v;return {v,t:ty==='number'?'n':ty==='boolean'?'b':(ERR.test(v)?'e':'s')};};
+      const useGrid=(low==='data'&&nR>1);
+      const W=c0+nC,grid=useGrid?new Array(nR):null;if(useGrid){grid.r0=r0;ws['!grid']=grid;}
+      const put=(v,key,gi,gc)=>{const cell=mkc(v);if(key)ws[key]=cell;if(grid){const rw=grid[gi]||(grid[gi]=new Array(W).fill(null));rw[gc]=cell;}};
+      let keep=[];for(let j=0;j<nC;j++)keep.push(j);
+      let from=0;
+      if(useGrid){
+        const hr=sh.getRangeByIndexes(r0,c0,1,nC);hr.load('values');await ctx.sync();
+        const HV=hr.values[0];
+        keep=[];
+        for(let j=0;j<nC;j++){const v=HV[j];if(v!==''&&v!==null)put(v,CL[j]+(r0+1),0,c0+j);
+          const hn=String(v===null?'':v).trim().toLowerCase();
+          if(SKIP.has(hn))window.__skipped.push(String(v));else keep.push(j);}
+        from=1;
+      }
+      /* blocs de colonnes contiguës */
+      const blocks=[];for(const j of keep){const b=blocks[blocks.length-1];if(b&&b.e===j-1)b.e=j;else blocks.push({s:j,e:j});}
+      const chunk=Math.max(1,Math.floor(100000/Math.max(1,keep.length)));
+      for(let off=from;off<nR;off+=chunk){
+        const n=Math.min(chunk,nR-off);
+        const rgs=blocks.map(b=>{const rg=sh.getRangeByIndexes(r0+off,c0+b.s,n,b.e-b.s+1);rg.load('values');return rg;});
+        await ctx.sync();
+        rgs.forEach((rg,bi)=>{const V=rg.values,bs=blocks[bi].s,w=blocks[bi].e-bs+1;
+          for(let i=0;i<n;i++){const row=V[i];for(let j=0;j<w;j++){const v=row[j];if(v===''||v===null)continue;
+            if(grid)put(v,'',off+i,c0+bs+j);else ws[CL[bs+j]+(r0+off+i+1)]=mkc(v);}}});
       }
       ws['!ref']=colL(c0)+(r0+1)+':'+colL(c0+nC-1)+(r0+nR);
       wb.Sheets[sh.name]=ws;
@@ -515,7 +549,7 @@ async function dataCtx(ctx){
   const cols={};hr.values[0].forEach((hh,i)=>{const k=String(hh).trim().toLowerCase();if(k&&cols[k]===undefined)cols[k]=ur.columnIndex+i;});
   return {sh,cols,last:ur.rowIndex+ur.rowCount-1};
 }
-const dcol=(d,...ns)=>{for(const n of ns){const k=n.toLowerCase();if(d.cols[k]!==undefined)return d.cols[k];}return -1;};
+const dcol=(d,...ns)=>{for(const n of ns){const k=n.toLowerCase();if(d.cols[k]!==undefined)return d.cols[k];}for(const n of ns){const al=COL_ALIASES[n.toLowerCase()];if(al)for(const a of al){if(d.cols[a]!==undefined)return d.cols[a];}}return -1;};
 async function readCol(ctx,d,c,withF){
   const out={v:[],f:[]};
   for(let r=2;r<=d.last;r+=20000){
@@ -1087,6 +1121,310 @@ function Reliab(p){
   return h('div',{style:{background:warn?'#fffbeb':'#f8fafc',border:'1px solid '+(warn?'#fde68a':'#e2e8f0'),borderRadius:8,padding:'5px 8px',fontSize:'.72rem',color:warn?'#92400e':'#64748b',marginBottom:10,flex:1}},
     (warn?'⚠️ ':'')+'Fiabilité de la période : '+fP(d,0)+' % des posts ont une date, '+fP(v,0)+' % une visibilité, '+fP(e,0)+' % un engagement (hors stories et websites).'+(nd?' '+nd+' post'+(nd>1?'s':'')+' sans date : absents des graphiques mensuels.':''));
 }
+/* ═════════ Onglet Outils : traitements sur la SÉLECTION, utilisables dans n'importe quel classeur ═════════ */
+const hostOf=(s)=>{const m=/^(?:[a-z][a-z0-9+.-]*:\/\/)?([^\/?#\s]+)/i.exec(String(s).trim());return m?m[1].toLowerCase().replace(/^(www|m|mobile|web|mbasic)\./,''):'';};
+const looksUrl=(s)=>/^(https?:\/\/|www\.)\S+$/i.test(String(s).trim());
+const platOfUrl=(s)=>{
+  const h0=hostOf(s);
+  if(/(^|\.)facebook\.com$|(^|\.)fb\.com$|^fb\.watch$/.test(h0))return 'facebook';
+  if(/(^|\.)instagram\.com$|^instagr\.am$/.test(h0))return 'instagram';
+  if(/(^|\.)(twitter|x)\.com$/.test(h0))return 'twitter';
+  if(/(^|\.)youtube\.com$|^youtu\.be$|(^|\.)youtube-nocookie\.com$/.test(h0))return 'youtube';
+  if(/(^|\.)tiktok\.com$/.test(h0))return 'tiktok';
+  if(/(^|\.)linkedin\.com$|^lnkd\.in$/.test(h0))return 'linkedin';
+  if(/(^|\.)strava\.com$|^strava\.app\.link$/.test(h0))return 'strava';
+  if(/(^|\.)twitch\.tv$/.test(h0))return 'twitch';
+  return 'inconnue';
+};
+const cut19=(id)=>id.length>19?id.slice(-19):id;
+const bare=(s)=>String(s).trim().split(/[?#]/)[0].replace(/\/+$/,'');
+const ID_RULES={
+  facebook:{note:'après posts/ (numérique ou pfbid…) · fbid= · story_fbid= · pageid_postid · reel/videos/ID · watch?v=',fn:(s)=>{
+    let m=s.match(/facebook\.com\/\d+_(\d+)/i);if(m)return m[1];
+    m=s.match(/\/posts\/(pfbid[A-Za-z0-9]+|\d+)/i);if(m)return m[1];
+    m=s.match(/[?&](?:story_fbid|fbid)=(\d+)/i);if(m)return m[1];
+    m=s.match(/\/(?:videos|reel|reels)\/(\d+)/i);if(m)return m[1];
+    m=s.match(/[?&]v=(\d+)/i);if(m)return m[1];
+    m=s.match(/\/permalink\/(\d+)/i);if(m)return m[1];
+    m=s.match(/\/photos\/[^\/?#]+\/(\d+)/i);if(m)return m[1];
+    return null;}},
+  instagram:{note:'code court après /p/, /reel/ ou /tv/',fn:(s)=>{const m=s.match(/instagram\.com\/(?:[^\/?#]+\/)?(?:p|reel|reels|tv)\/([A-Za-z0-9_-]+)/i);return m?m[1]:null;}},
+  twitter:{note:'identifiant numérique après /status/ (19 derniers caractères)',fn:(s)=>{
+    let m=s.match(/\/status(?:es)?\/(\d+)/i);if(m)return cut19(m[1]);
+    const t=bare(s).replace(/\//g,'');const l=t.slice(-19);return /^\d{19}$/.test(l)?l:null;}},
+  youtube:{note:'code après v=, youtu.be/, /shorts/, /live/ ou /embed/',fn:(s)=>{
+    let m=s.match(/[?&]v=([A-Za-z0-9_-]{6,})/i);if(m)return m[1];
+    m=s.match(/youtu\.be\/([A-Za-z0-9_-]{6,})/i);if(m)return m[1];
+    m=s.match(/\/(?:shorts|live|embed|v)\/([A-Za-z0-9_-]{6,})/i);return m?m[1]:null;}},
+  tiktok:{note:'identifiant numérique après video/ ou photo(s)/image(s)/ (19 derniers caractères)',fn:(s)=>{
+    let m=s.match(/\/(?:video|photo|image)s?\/(\d+)/i);if(m)return cut19(m[1]);
+    const t=bare(s).replace(/\//g,'');const l=t.slice(-19);return /^\d{19}$/.test(l)?l:null;}},
+  twitch:{note:'/videos/ID · identifiant du clip',fn:(s)=>{let m=s.match(/twitch\.tv\/videos\/(\d+)/i);if(m)return m[1];m=s.match(/(?:clips\.twitch\.tv|twitch\.tv\/[^\/?#]+\/clip)\/([A-Za-z0-9_-]+)/i);return m?m[1]:null;}},
+  linkedin:{note:'URL entière',fn:(s)=>s.trim()},
+  strava:{note:'URL entière',fn:(s)=>s.trim()},
+  inconnue:{note:'plateforme non reconnue : aucun ID',fn:()=>null}
+};
+const extractId=(url)=>{const pl=platOfUrl(url);const s=String(url).trim();let id=null;try{id=ID_RULES[pl].fn(s);}catch(e){}return id?{st:'ok',pl,id:String(id)}:{st:'nomatch',pl};};
+const toPlayerUrl=(s)=>{
+  let m=String(s).trim().match(/^https?:\/\/(?:www\.|m\.|web\.)?facebook\.com\/(?:[^\/?#]+\/)?reels?\/(\d+)/i);if(m)return 'https://www.facebook.com/watch?v='+m[1];
+  m=String(s).trim().match(/^https?:\/\/(?:www\.|m\.)?youtube\.com\/shorts\/([A-Za-z0-9_-]{6,})/i);if(m)return 'https://www.youtube.com/watch?v='+m[1];
+  return null;
+};
+const ISO_DT=/^\s*(\d{4})-(\d{2})-(\d{2})[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?\s*(?:Z|[+-]\d{2}:?\d{2})?\s*$/i;
+const ISO_D=/^\s*(\d{4})-(\d{2})-(\d{2})\s*$/;
+const dSerial=(y,m,d)=>Date.UTC(+y,+m-1,+d)/86400000+25569;
+const validYMD=(y,m,d)=>{const t=new Date(Date.UTC(+y,+m-1,+d));return t.getUTCFullYear()===+y&&t.getUTCMonth()===+m-1&&t.getUTCDate()===+d;};
+const WS_ALL=/^[\s ​⁠﻿]+|[\s ​⁠﻿]+$/g;
+
+async function getSel(){
+  return Excel.run(async(ctx)=>{
+    let ra=null;
+    try{ra=ctx.workbook.getSelectedRanges();ra.areas.load('items/rowIndex,items/rowCount,items/columnIndex,items/columnCount');ra.worksheet.load('name');await ctx.sync();}catch(e){ra=null;}
+    if(!ra){const r=ctx.workbook.getSelectedRange();r.load('rowIndex,rowCount,columnIndex,columnCount');r.worksheet.load('name');await ctx.sync();
+      return {sheet:r.worksheet.name,areas:[{rowIndex:r.rowIndex,rowCount:r.rowCount,columnIndex:r.columnIndex,columnCount:r.columnCount}]};}
+    return {sheet:ra.worksheet.name,areas:ra.areas.items.map(a=>({rowIndex:a.rowIndex,rowCount:a.rowCount,columnIndex:a.columnIndex,columnCount:a.columnCount}))};
+  });
+}
+/* lit les cellules non vides de la sélection (limitée à la zone utilisée de la feuille) */
+async function readSel(cap){
+  cap=cap||300000;
+  const s=await getSel();
+  return Excel.run(async(ctx)=>{
+    const ws=ctx.workbook.worksheets.getItem(s.sheet);
+    const ur=ws.getUsedRangeOrNullObject(true);ur.load('rowIndex,columnIndex,rowCount,columnCount,isNullObject');await ctx.sync();
+    const out={sheet:s.sheet,cells:[],truncated:false,scanned:0};
+    if(ur.isNullObject)return out;
+    const R1=ur.rowIndex+ur.rowCount-1,C1=ur.columnIndex+ur.columnCount-1,seen=new Set();
+    for(const a of s.areas){
+      const r0=Math.max(a.rowIndex,0),r1=Math.min(a.rowIndex+a.rowCount-1,R1),c0=Math.max(a.columnIndex,0),c1=Math.min(a.columnIndex+a.columnCount-1,C1);
+      if(r1<r0||c1<c0)continue;const w=c1-c0+1,step=Math.max(1,Math.floor(20000/w));
+      for(let r=r0;r<=r1;r+=step){
+        const n=Math.min(step,r1-r+1);
+        if(out.scanned+n*w>cap){out.truncated=true;break;}
+        const rg=ws.getRangeByIndexes(r,c0,n,w);rg.load('values,formulasR1C1,numberFormat');await ctx.sync();out.scanned+=n*w;
+        for(let i=0;i<n;i++)for(let j=0;j<w;j++){
+          const v=rg.values[i][j];if(v===''||v===null)continue;
+          const key=(r+i)*16384+(c0+j);if(seen.has(key))continue;seen.add(key);
+          out.cells.push({r:r+i,c:c0+j,v,f:rg.formulasR1C1[i][j],nf:rg.numberFormat[i][j]});
+        }
+      }
+    }
+    return out;
+  });
+}
+async function sheetCols(){
+  const s=await getSel();
+  return Excel.run(async(ctx)=>{
+    const ws=ctx.workbook.worksheets.getItem(s.sheet);
+    const ur=ws.getUsedRangeOrNullObject(true);ur.load('rowIndex,columnIndex,rowCount,columnCount,isNullObject');await ctx.sync();
+    if(ur.isNullObject)return {sheet:s.sheet,cols:[]};
+    const hr=ws.getRangeByIndexes(ur.rowIndex,ur.columnIndex,1,ur.columnCount);hr.load('values');await ctx.sync();
+    return {sheet:s.sheet,cols:hr.values[0].map((v,i)=>({c:ur.columnIndex+i,letter:colL(ur.columnIndex+i),name:String(v==null?'':v).trim()}))};
+  });
+}
+/* valeurs actuelles de la colonne cible, pour les lignes demandées */
+async function readTarget(sheet,col,rows){
+  return Excel.run(async(ctx)=>{
+    const ws=ctx.workbook.worksheets.getItem(sheet);const rs=[...rows].sort((a,b)=>a-b),map=new Map();
+    let i=0;
+    while(i<rs.length){let j=i;while(j+1<rs.length&&rs[j+1]-rs[j]<=500&&rs[j+1]-rs[i]<20000)j++;
+      const n=rs[j]-rs[i]+1,rg=ws.getRangeByIndexes(rs[i],col,n,1);rg.load('values,formulasR1C1');await ctx.sync();
+      for(let k=i;k<=j;k++){const o=rs[k]-rs[i];map.set(rs[k],{v:rg.values[o][0],f:rg.formulasR1C1[o][0]});}
+      i=j+1;}
+    return map;
+  });
+}
+const isEmptyV=(v)=>v===''||v===null||v===undefined;
+const isF=(f)=>typeof f==='string'&&f.charAt(0)==='=';
+/* écriture sécurisée : on relit chaque cellule juste avant d'écrire et on ne touche pas à ce qui a changé */
+async function writeChanges(sheet,changes){
+  return Excel.run(async(ctx)=>{
+    const ws=ctx.workbook.worksheets.getItem(sheet);let n=0,skipped=0;
+    for(let i=0;i<changes.length;i+=500){
+      const part=changes.slice(i,i+500);
+      const cells=part.map(ch=>{const c=ws.getCell(ch.r,ch.c);c.load('values,formulasR1C1');return c;});
+      await ctx.sync();
+      part.forEach((ch,k)=>{
+        const cur=cells[k].values[0][0],f=cells[k].formulasR1C1[0][0];
+        const ok=!isF(f)&&(ch.expect==='empty'?isEmptyV(cur):cur===ch.before);
+        if(!ok){skipped++;return;}
+        if(ch.fmt)cells[k].numberFormat=[[ch.fmt]];
+        cells[k].values=[[ch.v]];n++;
+      });
+      await ctx.sync();
+    }
+    return {n,skipped};
+  });
+}
+
+/* ───── plans (calcul de ce qui serait modifié, sans rien écrire) ───── */
+async function planIds(sel,o){
+  const ign={'cellules sans URL':0,'formules ignorées':0};const ch=[],bad=[];let exists=0;
+  const urls=[];
+  for(const c of sel.cells){
+    if(isF(c.f)){ign['formules ignorées']++;continue;}
+    if(typeof c.v!=='string'||!looksUrl(c.v)){ign['cellules sans URL']++;continue;}
+    urls.push(c);
+  }
+  let tmap=null;
+  if(o.mode==='fill'){
+    if(o.tcol==null)throw new Error('Choisissez la colonne à remplir.');
+    if(o.colsSheet!==sel.sheet)throw new Error("La sélection est sur la feuille « "+sel.sheet+" » mais les colonnes proposées viennent de « "+o.colsSheet+" » : cliquez sur « Relire les colonnes ».");
+    if(urls.some(c=>c.c===o.tcol))throw new Error('La colonne à remplir contient des URLs sélectionnées : choisissez une autre colonne, ou le mode « Remplacer dans la cellule ».');
+    tmap=await readTarget(sel.sheet,o.tcol,new Set(urls.map(c=>c.r)));
+  }
+  const rowSeen=new Set();
+  for(const c of urls){
+    const x=extractId(c.v);
+    if(x.st!=='ok'){bad.push({r:c.r,pl:x.pl,v:c.v});continue;}
+    if(o.mode==='fill'){
+      const t=tmap.get(c.r);
+      if(rowSeen.has(c.r)){ign['2e URL sur une même ligne']=(ign['2e URL sur une même ligne']||0)+1;continue;}
+      rowSeen.add(c.r);
+      if(t&&(!isEmptyV(t.v)||isF(t.f))){exists++;continue;}
+      ch.push({r:c.r,c:o.tcol,v:x.id,fmt:'@',expect:'empty',before:c.v,pl:x.pl});
+    }else{
+      if(x.id===c.v)continue;
+      ch.push({r:c.r,c:c.c,v:x.id,fmt:'@',expect:'same',before:c.v,pl:x.pl});
+    }
+  }
+  if(exists)ign['ID déjà rempli (non touché)']=exists;
+  return {changes:ch,ign,bad,sheet:sel.sheet,truncated:sel.truncated,byPl:ch.reduce((m,x)=>{m[x.pl]=(m[x.pl]||0)+1;return m;},{})};
+}
+async function planPlayer(sel){
+  const ign={'autres cellules':0,'formules ignorées':0};const ch=[];
+  for(const c of sel.cells){
+    if(isF(c.f)){ign['formules ignorées']++;continue;}
+    const nu=typeof c.v==='string'?toPlayerUrl(c.v):null;
+    if(!nu||nu===c.v){ign['autres cellules']++;continue;}
+    ch.push({r:c.r,c:c.c,v:nu,fmt:'@',expect:'same',before:c.v});
+  }
+  return {changes:ch,ign,bad:[],sheet:sel.sheet,truncated:sel.truncated};
+}
+async function planDates(sel,o){
+  const ign={'autres cellules':0,'formules ignorées':0,'dates invalides':0};const ch=[];
+  for(const c of sel.cells){
+    if(isF(c.f)){ign['formules ignorées']++;continue;}
+    let y=null,m=null,d=null,fromText=false;
+    if(typeof c.v==='string'){
+      let x=ISO_DT.exec(c.v);if(!x&&o.real)x=ISO_D.exec(c.v);
+      if(x){y=x[1];m=x[2];d=x[3];fromText=true;}
+    }else if(typeof c.v==='number'&&c.v>20000&&c.v<80000&&c.v!==Math.floor(c.v)&&/[hH]/.test(String(c.nf||''))&&/[yYdD]/.test(String(c.nf||''))){
+      const dt=new Date(Math.round((Math.floor(c.v)-25569)*86400000));y=dt.getUTCFullYear();m=dt.getUTCMonth()+1;d=dt.getUTCDate();
+    }
+    if(y===null){ign['autres cellules']++;continue;}
+    if(!validYMD(y,m,d)){ign['dates invalides']++;continue;}
+    const ymd=String(y).padStart(4,'0')+'-'+String(m).padStart(2,'0')+'-'+String(d).padStart(2,'0');
+    if(o.real)ch.push({r:c.r,c:c.c,v:dSerial(y,m,d),fmt:'yyyy-mm-dd',expect:'same',before:c.v,label:ymd});
+    else ch.push({r:c.r,c:c.c,v:ymd,fmt:'@',expect:'same',before:c.v,label:ymd});
+  }
+  return {changes:ch,ign,bad:[],sheet:sel.sheet,truncated:sel.truncated};
+}
+async function planSpaces(sel){
+  const ign={'autres cellules':0,'formules ignorées':0,'ressemble à un nombre':0};const ch=[];
+  for(const c of sel.cells){
+    if(isF(c.f)){ign['formules ignorées']++;continue;}
+    if(typeof c.v!=='string'){ign['autres cellules']++;continue;}
+    const t=c.v.replace(WS_ALL,'');if(t===c.v){ign['autres cellules']++;continue;}
+    if(!t||/^[\d.,\s-]+$/.test(t)){ign['ressemble à un nombre']++;continue;}
+    ch.push({r:c.r,c:c.c,v:t,fmt:null,expect:'same',before:c.v});
+  }
+  return {changes:ch,ign,bad:[],sheet:sel.sheet,truncated:sel.truncated};
+}
+
+const cellRef=(r,c)=>colL(c)+(r+1);
+const shortTxt=(s,n)=>{s=String(s);return s.length>n?s.slice(0,n)+'…':s;};
+
+/* Bloc outil : Analyser → aperçu → confirmation → écriture */
+function ToolBox(p){
+  const {title,desc,plan,canRun,onToast,onWritten,verb,children}=p;
+  const [res,setRes]=useState(null);
+  const [busy,setBusy]=useState('');
+  const [err,setErr]=useState('');
+  const [armed,setArmed]=useState(false);
+  const box={background:'#fff',border:'1px solid #e2e8f0',borderRadius:10,padding:'.65rem .75rem',marginBottom:10};
+  const td={padding:'3px 5px',borderBottom:'1px solid #f1f5f9',verticalAlign:'top',fontSize:'.72rem'};
+  const run=async()=>{setErr('');setRes(null);setArmed(false);setBusy('plan');
+    try{const sel=await readSel();if(!sel.cells.length)throw new Error('Sélectionnez d\'abord des cellules (non vides) dans Excel.');setRes(await plan(sel));}
+    catch(e){setErr(String(e&&e.message?e.message:e));}setBusy('');};
+  const go=async()=>{
+    if(!armed){setArmed(true);return;}
+    setArmed(false);setBusy('write');
+    try{const r=await writeChanges(res.sheet,res.changes);
+      onToast(r.n+' cellule'+(r.n>1?'s':'')+' modifiée'+(r.n>1?'s':'')+(r.skipped?' · '+r.skipped+' non touchée'+(r.skipped>1?'s':'')+' (valeur modifiée entre-temps)':'')+'.');
+      setRes(null);onWritten&&onWritten();}
+    catch(e){setErr(String(e&&e.message?e.message:e));}setBusy('');};
+  const n=res?res.changes.length:0;
+  return h('div',{style:box},
+    h('div',{style:{fontWeight:800,fontSize:'.86rem',marginBottom:4}},title),
+    h('div',{style:{fontSize:'.73rem',color:'#475569',lineHeight:1.5,marginBottom:8}},desc),
+    children,
+    h('div',{style:{display:'flex',gap:6,flexWrap:'wrap',marginTop:4}},
+      h('button',{style:BTN_B,disabled:!!busy||canRun===false,onClick:run},busy==='plan'?'Analyse…':'🔎 Analyser la sélection')),
+    err?h('div',{style:{background:'#fef2f2',border:'1px solid #fecaca',color:'#b91c1c',borderRadius:6,padding:'5px 8px',fontSize:'.74rem',marginTop:8}},err):null,
+    res?h('div',{style:{marginTop:10}},
+      h('div',{style:{fontSize:'.76rem',marginBottom:6}},
+        h('strong',{style:{color:n?'#15803d':'#64748b'}},n+' cellule'+(n>1?'s':'')+' à modifier'),
+        Object.keys(res.ign).filter(k=>res.ign[k]).map(k=>h('span',{key:k,style:{color:'#64748b'}},' · '+res.ign[k]+' '+k)),
+        res.bad.length?h('span',{style:{color:'#b45309'}},' · '+res.bad.length+' sans ID (plateforme ou format non reconnu)'):null),
+      res.truncated?h('div',{style:{fontSize:'.72rem',color:'#b45309',marginBottom:6}},'⚠️ Sélection très grande : seules les 300 000 premières cellules ont été analysées.'):null,
+      res.byPl?h('div',{style:{fontSize:'.72rem',color:'#475569',marginBottom:6}},Object.keys(res.byPl).map(k=>k+' : '+res.byPl[k]+(ID_RULES[k]?' ('+ID_RULES[k].note+')':'')).join(' — ')):null,
+      n?h('div',{style:{overflowX:'auto',marginBottom:8}},h('table',{style:{width:'100%',borderCollapse:'collapse'}},h('tbody',null,
+        res.changes.slice(0,8).map((x,i)=>h('tr',{key:i},
+          h('td',{style:{...td,color:'#94a3b8'}},cellRef(x.r,x.c)),
+          h('td',{style:{...td,color:'#64748b',maxWidth:130,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'},title:String(x.before)},shortTxt(x.before,40)),
+          h('td',{style:td},'→'),
+          h('td',{style:{...td,fontWeight:700}},shortTxt(x.label||x.v,40))))))):null,
+      res.bad.length?h('div',{style:{fontSize:'.74rem',color:'#92400e',background:'#fffbeb',border:'1px solid #fde68a',borderRadius:6,padding:'5px 8px',marginBottom:8}},
+        'À regarder à la main : '+res.bad.slice(0,10).map(x=>cellRef(x.r,0).replace(/[A-Z]+/,'ligne ')).join(', ')+(res.bad.length>10?' …':'')):null,
+      n?h('button',{style:armed?{...BTN_F,padding:'6px 12px'}:{...BTN_B,padding:'6px 12px'},disabled:!!busy,onClick:go},
+        busy==='write'?'Écriture…':armed?'⚠️ Confirmer : '+verb+' '+n+' cellule'+(n>1?'s':'')+' (non annulable par Ctrl+Z)':'✍️ '+verb.charAt(0).toUpperCase()+verb.slice(1)+' '+n+' cellule'+(n>1?'s':'')):null,
+      armed?h('button',{style:{...BTN_N,marginLeft:6},onClick:()=>setArmed(false)},'Annuler'):null):null);
+}
+
+function OutilsTab(p){
+  const {onToast,onWritten}=p;
+  const [cols,setCols]=useState(null);
+  const [tcol,setTcol]=useState(null);
+  const [mode,setMode]=useState('fill');
+  const [real,setReal]=useState(true);
+  const [err,setErr]=useState('');
+  const loadCols=async()=>{
+    setErr('');
+    try{const r=await sheetCols();setCols(r);
+      const g=r.cols.find(x=>['post_id','id post','id_post','id','ids','id_post '].indexOf(x.name.toLowerCase())>=0);
+      setTcol(g?g.c:null);
+    }catch(e){setErr(String(e&&e.message?e.message:e));}
+  };
+  useEffect(()=>{loadCols();},[]);
+  const opts=cols?cols.cols.map(x=>({value:String(x.c),label:x.letter+(x.name?' · '+x.name:'')})):[];
+  const modeBtn=(k,l)=>h('button',{onClick:()=>setMode(k),style:{padding:'3px 9px',fontSize:'.74rem',fontWeight:700,cursor:'pointer',border:'1px solid '+(mode===k?'#2563eb':'#cbd5e1'),background:mode===k?'#2563eb':'#fff',color:mode===k?'#fff':'#334155',borderRadius:6}},l);
+  const rowS={display:'flex',alignItems:'center',gap:6,flexWrap:'wrap',marginBottom:6,fontSize:'.75rem'};
+  return h('div',null,
+    h('div',{style:{background:'#eff6ff',border:'1px solid #bfdbfe',borderRadius:8,padding:'6px 10px',fontSize:'.74rem',color:'#1e3a8a',marginBottom:10,lineHeight:1.5}},
+      "Ces outils travaillent sur les cellules que vous sélectionnez dans Excel, dans n'importe quel classeur (pas besoin d'un fichier pivot). Chacun affiche d'abord ce qu'il ferait ; rien n'est écrit sans votre confirmation."),
+    err?h('div',{style:{background:'#fef2f2',border:'1px solid #fecaca',color:'#b91c1c',borderRadius:6,padding:'5px 8px',fontSize:'.74rem',marginBottom:10}},err):null,
+    h(ToolBox,{title:'🆔 ID de post depuis les URL',onToast,onWritten,verb:'écrire',
+      desc:"Sélectionnez les cellules qui contiennent les URLs. La plateforme est reconnue d'après l'adresse (Facebook, Instagram, X/Twitter, YouTube, TikTok, Twitch ; LinkedIn et Strava = URL entière ; plateforme inconnue = aucun ID).",
+      canRun:mode==='inplace'||tcol!==null,
+      plan:(sel)=>planIds(sel,{mode,tcol,colsSheet:cols&&cols.sheet})},
+      h('div',{style:rowS},modeBtn('fill','Écrire dans une autre colonne'),modeBtn('inplace','Remplacer dans la cellule')),
+      mode==='fill'?h('div',{style:rowS},h('span',{style:{width:104,color:'#64748b'}},'Colonne à remplir'),h(Picker,{value:tcol===null?'':String(tcol),onChange:(v)=>setTcol(v===''?null:+v),options:[{value:'',label:'— choisir —'}].concat(opts)}),
+        h('button',{style:BTN_N,onClick:loadCols},'↻ Relire les colonnes'),
+        cols?h('span',{style:{color:'#94a3b8'}},'feuille « '+cols.sheet+' »'):null):null,
+      h('div',{style:{fontSize:'.7rem',color:'#64748b',marginBottom:4}},mode==='fill'?"Les cellules déjà remplies dans cette colonne ne sont jamais modifiées.":"L'URL est remplacée par l'ID dans la cellule sélectionnée (utile pour nettoyer une colonne d'ID contenant des URLs).")),
+    h(ToolBox,{title:'🔗 Shorts et reels → URL de lecteur standard',onToast,onWritten,verb:'convertir',
+      desc:"facebook.com/reel/ID → facebook.com/watch?v=ID · youtube.com/shorts/ID → youtube.com/watch?v=ID. Les autres cellules sont ignorées.",
+      plan:(sel)=>planPlayer(sel)}),
+    h(ToolBox,{title:'📅 Dates : retirer l\'heure',onToast,onWritten,verb:'nettoyer',
+      desc:"2026-10-19T18:18:30.000Z → 2026-10-19 (la date écrite est conservée telle quelle, sans conversion de fuseau). Traite aussi les dates Excel qui contiennent une heure.",
+      plan:(sel)=>planDates(sel,{real})},
+      h('div',{style:rowS},modeBtn2(real,setReal,true,'Vraie date Excel (affichée aaaa-mm-jj)'),modeBtn2(real,setReal,false,'Texte aaaa-mm-jj'))),
+    h(ToolBox,{title:'🧹 Espaces parasites',onToast,onWritten,verb:'nettoyer',
+      desc:"Supprime les espaces en début et fin de cellule (y compris insécables et invisibles). Les formules et les valeurs qui ressemblent à un nombre ne sont pas touchées.",
+      plan:(sel)=>planSpaces(sel)}));
+}
+const modeBtn2=(cur,set,val,l)=>h('button',{onClick:()=>set(val),style:{padding:'3px 9px',fontSize:'.74rem',fontWeight:700,cursor:'pointer',border:'1px solid '+(cur===val?'#2563eb':'#cbd5e1'),background:cur===val?'#2563eb':'#fff',color:cur===val?'#fff':'#334155',borderRadius:6}},l);
 
 /* ═════════ Interface ═════════ */
 const h=React.createElement;
@@ -1291,7 +1629,7 @@ function PivotVerifier(){
   const [tab,setTab]=useState('verif');
   const prev=useRef(null);
 
-  const runningRef=useRef(false),pendingRef=useRef(false),autoRef=useRef(true),runRef=useRef(null),timerRef=useRef(null),quietRef=useRef(0),durRef=useRef(0),evRef=useRef(null);
+  const runningRef=useRef(false),pendingRef=useRef(false),autoRef=useRef(true),runRef=useRef(null),timerRef=useRef(null),quietRef=useRef(0),durRef=useRef(0),tabInit=useRef(false),evRef=useRef(null);
   const run=async(msg,silent)=>{
     if(runningRef.current){pendingRef.current=true;return;}
     runningRef.current=true;const t0=Date.now();
@@ -1301,6 +1639,7 @@ function PivotVerifier(){
     try{
       const wb=await loadWorkbook();
       const dsn=wb.SheetNames.find(s=>s.toLowerCase()==='data');
+      if(!dsn&&!tabInit.current){tabInit.current=true;setTab('outils');}
       setInfo({sheets:EXP.map(ex=>({ex,found:!!wb.SheetNames.find(s=>s.toLowerCase()===ex.toLowerCase())})),rows:dsn?gR(wb.Sheets[dsn],2).length:0});
       ROWBUF.length=0;
       await new Promise(r=>setTimeout(r,0));
@@ -1429,7 +1768,8 @@ function PivotVerifier(){
           h('button',{style:BTN_N,onClick:()=>setShowHelp(true)},'❓'))),
       h('div',{style:{display:'flex',gap:6,marginTop:7}},
         h('button',{onClick:()=>setTab('verif'),style:{...btn(tab==='verif'?'#1e293b':'#fff',tab==='verif'?'#fff':'#334155','#1e293b'),flex:1}},'🔍 Vérifications'),
-        h('button',{onClick:()=>setTab('analyse'),style:{...btn(tab==='analyse'?'#1e293b':'#fff',tab==='analyse'?'#fff':'#334155','#1e293b'),flex:1}},'📈 Analyse')),
+        h('button',{onClick:()=>setTab('analyse'),style:{...btn(tab==='analyse'?'#1e293b':'#fff',tab==='analyse'?'#fff':'#334155','#1e293b'),flex:1}},'📈 Analyse'),
+        h('button',{onClick:()=>setTab('outils'),style:{...btn(tab==='outils'?'#1e293b':'#fff',tab==='outils'?'#fff':'#334155','#1e293b'),flex:1}},'🛠 Outils')),
       (results.length&&tab==='verif')?h('div',{style:{display:'flex',flexWrap:'wrap',gap:5,marginTop:7,alignItems:'center'}},
         chip('🔴 '+bl.length+' bloquant'+(bl.length>1?'s':''),bl.length?'#fee2e2':'#e2e8f0',bl.length?'#b91c1c':'#64748b'),
         chip('🟠 '+vf.length+' à vérifier',vf.length?'#fef3c7':'#e2e8f0',vf.length?'#b45309':'#64748b'),
@@ -1466,7 +1806,8 @@ function PivotVerifier(){
 
       h(Group,{title:'ℹ️ Informations',accent:'#0369a1',count:infos.length,open:openG.has('i'),onToggle:()=>flip(setOpenG,'i')},infos.map(r=>cardFor(r,'i'))),
       h(Group,{title:'✅ Contrôles OK',accent:'#15803d',count:oks.length,open:openG.has('ok'),onToggle:()=>flip(setOpenG,'ok')},oks.map(r=>cardFor(r,'ok'))))),
-    h('div',{style:{display:tab==='analyse'?'block':'none'},onClick:onClickReport},h(AnalyseMemo,{tops,brand:recapBrand,onBrand:setRecapBrand,onToast:setToast})));
+    h('div',{style:{display:tab==='analyse'?'block':'none'},onClick:onClickReport},h(AnalyseMemo,{tops,brand:recapBrand,onBrand:setRecapBrand,onToast:setToast})),
+    h('div',{style:{display:tab==='outils'?'block':'none'},onClick:onClickReport},h(OutilsTab,{onToast:setToast,onWritten:()=>{if(!(window.__realNames&&window.__realNames.DATA))return;quietRef.current=Date.now()+4000;setTimeout(()=>runRef.current&&runRef.current(undefined,true),600);}})));
 }
 
 Office.onReady(()=>{ReactDOM.createRoot(document.getElementById('root')).render(h(PivotVerifier));});
