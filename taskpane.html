@@ -1945,7 +1945,27 @@ function planUpdate(pivotRows, records, opts = {}) {
   };
 }
 
-const api = { planUpdate, socialActions, decide, roundingStep, detectPivotFormat, colFor, WRITABLE, PIVOT_COLS_OLD, PIVOT_COLS_VMD };
+// Récapitulatif par plateforme : lignes du pivot (dans le périmètre), publications des exports, correspondances
+const PLAT_NAMES = { instagram: 'Instagram', tiktok: 'TikTok', youtube: 'YouTube', twitter: 'X / Twitter', facebook: 'Facebook' };
+function platformRecap(pivotRows, records, res, opts = {}) {
+  const P = opts.cols || PIVOT_COLS_OLD, scope = opts.scope || null, out = {};
+  const get = (p) => out[p] || (out[p] = { plat: p, label: PLAT_NAMES[p] || p, rows: 0, exports: 0, matched: 0, updated: 0, notFound: 0 });
+  for (const r of pivotRows) {
+    const p = String(r[P.platform] ?? '').trim().toLowerCase();
+    if (!WRITABLE[p]) continue;
+    if (scope && !scope.has(r.row)) continue;
+    get(p).rows++;
+  }
+  for (const rec of records) get(rec.pivotPlatform).exports++;
+  for (const l of res.lines) {
+    const o = get(l.platform);
+    if (l.status === 'non_trouve') o.notFound++; else o.matched++;
+    if (l.status === 'mis_a_jour' || l.status === 'mis_a_jour_avec_baisse') o.updated++;
+  }
+  return Object.values(out).filter(o => o.rows > 0 || o.exports > 0).sort((a, b) => b.rows - a.rows);
+}
+
+const api = { platformRecap, planUpdate, socialActions, decide, roundingStep, detectPivotFormat, colFor, WRITABLE, PIVOT_COLS_OLD, PIVOT_COLS_VMD };
 
 return api;
 })();
@@ -2482,7 +2502,7 @@ function UpdateTab(p){
       const platforms=new Set(recs.map(r=>r.pivotPlatform));
       const res=PivotUpd.planUpdate(pv.rows,recs,{cols:pv.P,extractId:idOnly,scope:pv.scope,platforms,metrics:pv.metrics});
       const wr=buildWrites(pv,res,{track});
-      setPlan({sheet:pv.sheet,kind:target.kind,nrows:pv.rows.length,scopeN:pv.scope?pv.scope.size:null,res,writes:wr.writes,counts:wr.counts,hdr:pv.hdr,firstRow:pv.firstIdx+1,track,scopeLabel:(scope==='all'?'tout le fichier':(scope==='selection'?'sélection':(counts&&counts.visible<counts.all?'données filtrées':'lignes visibles'))+(pv.scope?' · lignes '+rangesOf([...pv.scope]):'')),unknown:pv.unknown||0,bigIds:pv.bigIds||0,
+      setPlan({recap:PivotUpd.platformRecap(pv.rows,recs,res,{cols:pv.P,scope:pv.scope}),sheet:pv.sheet,kind:target.kind,nrows:pv.rows.length,scopeN:pv.scope?pv.scope.size:null,res,writes:wr.writes,counts:wr.counts,hdr:pv.hdr,firstRow:pv.firstIdx+1,track,scopeLabel:(scope==='all'?'tout le fichier':(scope==='selection'?'sélection':(counts&&counts.visible<counts.all?'données filtrées':'lignes visibles'))+(pv.scope?' · lignes '+rangesOf([...pv.scope]):'')),unknown:pv.unknown||0,bigIds:pv.bigIds||0,
         newCols:MAJ_COLS.filter(([k])=>!pv.newCols[k].exists).length});
       setStep('review');
     }catch(e){setErr(msg(e));}
@@ -2621,6 +2641,19 @@ function UpdateTab(p){
         S.exportRecordsNotInPivot?line('ℹ️',fr(S.exportRecordsNotInPivot)+' publication'+pl(S.exportRecordsNotInPivot,'')+' des exports n\'étai'+(S.exportRecordsNotInPivot>1?'ent':'t')+' pas dans les lignes choisies (ignorée'+pl(S.exportRecordsNotInPivot,'')+')','#64748b'):null,
         plan.unknown?line('⚠️',plan.unknown+' ligne'+pl(plan.unknown,'')+' sans plateforme reconnue ignorée'+pl(plan.unknown,''),'#b45309'):null,
         plan.bigIds?line('⚠️',plan.bigIds+' ID tronqué'+pl(plan.bigIds,'')+' par Excel : repris depuis l\'URL quand elle existe','#b45309'):null),
+      (plan.recap&&plan.recap.length)?h('div',{style:{...box,padding:'.5rem .8rem'}},
+        h('div',{style:{fontWeight:700,fontSize:'.8rem',marginBottom:4}},'Par plateforme'),
+        h('div',{style:{overflowX:'auto'}},h('table',{style:{width:'100%',borderCollapse:'collapse'}},
+          h('thead',null,h('tr',null,['Plateforme','Lignes du fichier','Export','Retrouvées','Mises à jour'].map((x,i)=>h('th',{key:i,style:{...td,textAlign:i?'right':'left',color:'#64748b',fontWeight:700}},x)))),
+          h('tbody',null,plan.recap.map(o=>h('tr',{key:o.plat},
+            h('td',{style:td},o.label),
+            h('td',{style:{...td,textAlign:'right'}},fr(o.rows)),
+            h('td',{style:{...td,textAlign:'right',color:o.rows&&!o.exports?'#b45309':'#334155'}},o.exports?fr(o.exports):'—'),
+            h('td',{style:{...td,textAlign:'right',color:o.exports&&o.rows&&!o.matched?'#b91c1c':'#334155'}},fr(o.matched)),
+            h('td',{style:{...td,textAlign:'right',fontWeight:700,color:o.updated?'#166534':'#94a3b8'}},fr(o.updated))))))),
+        plan.recap.filter(o=>o.rows&&!o.exports).map(o=>h('div',{key:'n'+o.plat,style:{fontSize:'.72rem',color:'#b45309',marginTop:4}},'⚠️ '+o.label+' : '+fr(o.rows)+' ligne'+pl(o.rows,'')+' dans le fichier mais aucun export déposé, elles ne sont pas touchées.')),
+        plan.recap.filter(o=>o.exports&&o.rows&&!o.matched).map(o=>h('div',{key:'m'+o.plat,style:{fontSize:'.72rem',color:'#b91c1c',marginTop:4}},'⚠️ '+o.label+' : aucune publication de l\'export retrouvée dans le fichier, est-ce le bon fichier ?')),
+        plan.recap.filter(o=>o.exports&&!o.rows).map(o=>h('div',{key:'e'+o.plat,style:{fontSize:'.72rem',color:'#64748b',marginTop:4}},'ℹ️ '+o.label+' : aucune ligne dans le périmètre choisi.'))):null,
       (changed.length||drops.length||notFound.length)?h('details',{style:{...box,padding:'.5rem .8rem'}},
         h('summary',{style:{cursor:'pointer',fontWeight:700,fontSize:'.8rem'}},'Voir le détail'),
         changed.length?h('div',{style:{overflowX:'auto',margin:'8px 0'}},h('table',{style:{width:'100%',borderCollapse:'collapse'}},h('tbody',null,
