@@ -871,7 +871,8 @@ function AnalyseTab(p){
   };
   const dimOpts=[{value:'p',label:'Plateforme'},{value:'o',label:'Type (owned/paid/earned)'}].concat(tops.brandDetected.length?[{value:'b',label:'Marque'}]:[]);
   return h('div',null,
-    h('div',{style:box},ttl('📅 Périodes à analyser'),
+    h('div',{style:box},ttl('📅 Que voulez-vous analyser ?'),
+      h('div',{style:{fontSize:'.72rem',color:'#64748b',marginBottom:8,lineHeight:1.5}},'Choisissez la période (colonne ou dates), puis une période de comparaison si besoin. La marque, plus bas, restreint l\'analyse à une seule marque.'),
       h('div',{style:{display:'flex',gap:6,marginBottom:8}},modeBtn('col','Par colonne'),modeBtn('date','Par dates')),
       mode==='col'?h('div',null,
           row('Colonne',sel(col,(v)=>{setCol(v);setVa('');setVb('');},colOpts)),
@@ -1242,7 +1243,7 @@ async function readTarget(sheet,col,rows){
 const isEmptyV=(v)=>v===''||v===null||v===undefined;
 const isF=(f)=>typeof f==='string'&&f.charAt(0)==='=';
 /* écriture sécurisée : on relit chaque cellule juste avant d'écrire et on ne touche pas à ce qui a changé */
-async function writeChanges(sheet,changes,onProg){
+async function writeChanges(sheet,changes,onProg,collect){
   return Excel.run(async(ctx)=>{
     const ws=ctx.workbook.worksheets.getItem(sheet);let n=0,skipped=0;
     for(let i=0;i<changes.length;i+=500){
@@ -1254,7 +1255,7 @@ async function writeChanges(sheet,changes,onProg){
         const ok=!isF(f)&&(ch.expect==='empty'?isEmptyV(cur):ch.expect==='any'?true:cur===ch.before);
         if(!ok){skipped++;return;}
         if(ch.fmt)cells[k].numberFormat=[[ch.fmt]];
-        if(ch.formula)cells[k].formulas=[[ch.formula]];else cells[k].values=[[ch.v]];n++;
+        if(collect)collect.push({r:ch.r,c:ch.c,old:cur,nw:ch.formula||ch.v,isF:!!ch.formula});if(ch.formula)cells[k].formulas=[[ch.formula]];else cells[k].values=[[ch.v]];n++;
       });
       await ctx.sync();
       if(onProg)onProg(Math.min(i+500,changes.length),changes.length);
@@ -1907,6 +1908,7 @@ function planUpdate(pivotRows, records, opts = {}) {
 
     let status = 'inchange', drops = 0;
     for (const m of WRITABLE[plat]) {
+      if (opts.metrics && !opts.metrics.has(m)) continue;   // mesure sans colonne dans ce fichier
       const d = decide(m, before[m], best[m] === undefined ? null : best[m], rec0);
       if (d.action === 'fill' || d.action === 'raise') { changes[m] = { old: before[m], new: d.value, kind: d.action, column: colFor(P, plat, m) }; after[m] = d.value; }
       else if (d.action === 'drop') { drops++; flags.push(`baisse_${m}`); changes[m] = { old: before[m], new: before[m], incoming: d.incoming, kind: 'drop', column: colFor(P, plat, m) }; }
@@ -2000,17 +2002,17 @@ async function readExportFile(file){
 }
 
 /* ── lecture du pivot (colonnes utiles uniquement) ── */
-async function loadPivotForUpdate(scope){
+async function loadPivotForUpdate(scope,sheetName){
   const pv=await Excel.run(async(ctx)=>{
     const wl=ctx.workbook.worksheets;wl.load('items/name');await ctx.sync();
-    const nm=(window.__realNames&&window.__realNames.DATA)||(wl.items.find(s=>s.name.trim().toLowerCase()==='data')||{}).name;
-    if(!nm)throw new Error('Onglet DATA introuvable dans ce classeur.');
+    const nm=sheetName||(window.__realNames&&window.__realNames.DATA)||(wl.items.find(s=>s.name.trim().toLowerCase()==='data')||{}).name;
+    if(!nm)throw new Error('Onglet DATA introuvable dans ce classeur : utilisez le mode « Autre fichier ».');
     const sh=ctx.workbook.worksheets.getItem(nm);
     const ur=sh.getUsedRange(true);ur.load('rowIndex,columnIndex,rowCount,columnCount');await ctx.sync();
     const hr=sh.getRangeByIndexes(ur.rowIndex,ur.columnIndex,1,ur.columnCount);hr.load('values');await ctx.sync();
     const headers=hr.values[0].map(v=>String(v==null?'':v).trim());
     const P=PivotUpd.detectPivotFormat(headers);
-    if(!P)throw new Error('Format du pivot non reconnu : colonnes « ID post / Plateforme » ou « Post_id / social_media » introuvables.');
+    if(!P)throw new Error('Format du pivot non reconnu : colonnes « ID post / Plateforme » ou « Post_id / social_media » introuvables. S\'il ne s\'agit pas d\'un pivot, utilisez le mode « Autre fichier ».');
     const idx={};headers.forEach((hh,i)=>{const k=hh.toLowerCase();if(k&&idx[k]===undefined)idx[k]=ur.columnIndex+i;});
     const need=[P.platform,P.id,P.url,P.engagement,P.visibility,...Object.values(P.metrics),...Object.values(P.viewsByPlatform||{})];
     const cidx={},miss=[];
@@ -2037,13 +2039,112 @@ async function loadPivotForUpdate(scope){
     // colonnes ajoutées : réutilisées si elles existent déjà, sinon à la suite de la dernière colonne
     let next=ur.columnIndex+ur.columnCount;const newCols={};
     MAJ_COLS.forEach(([k,label])=>{const c=idx[label.toLowerCase()];if(c!==undefined)newCols[k]={c,name:label,exists:true};else newCols[k]={c:next++,name:label,exists:false};});
-    return {sheet:nm,P,rows,scope:scopeSet,cidx,newCols,headerRow:ur.rowIndex,firstIdx,lastIdx};
+    const hdr={};headers.forEach((hh,i)=>{hdr[ur.columnIndex+i]=hh;});MAJ_COLS.forEach(([k,label])=>{hdr[newCols[k].c]=label;});
+    return {sheet:nm,P,rows,scope:scopeSet,cidx,newCols,headerRow:ur.rowIndex,firstIdx,lastIdx,hdr};
   });
-  if(scope==='selection'){
-    const s=await getSel();
-    if(s.sheet!==pv.sheet)throw new Error('Sélectionnez des lignes dans l\'onglet « '+pv.sheet+' » (la sélection actuelle est dans « '+s.sheet+' »).');
-    pv.scope=new Set();s.areas.forEach(a=>{for(let k=0;k<a.rowCount;k++)pv.scope.add(a.rowIndex+k+1);});
+  if(scope==='selection')await applySelectionScope(pv);
+  return pv;
+}
+
+
+/* ── autre fichier (sans structure de pivot) : colonnes repérées par leur nom, ajustables ── */
+const GEN_FIELDS=[['id','ID du post'],['url','URL'],['platform','Plateforme (sinon déduite de l\'URL)'],['likes','Likes'],['comments','Commentaires'],['shares','Partages'],['retweets','Retweets'],['quotes','Quotes'],['saves','Saves'],['views','Vues / impressions'],['engagement','Engagement total (facultatif)'],['visibility','Visibilité (facultatif)']];
+const GEN_ALIASES={
+  id:['id post','post id','postid','id','id publication','id contenu','video id','tweet id','shortcode','id du post'],
+  url:['url','post url','posturl','url post','lien','link','permalink','url publication'],
+  platform:['plateforme','platform','social media','reseau','reseau social','network'],
+  likes:['likes','like','j aime','jaime','favorite count','like count','likes count','reactions'],
+  comments:['comments','comment','commentaires','commentaire','com','comment count','comments count','replies','reply count'],
+  shares:['shares','share','partages','partage','share count'],
+  retweets:['retweets','retweet','retweet count','rt'],
+  quotes:['quotes','quote','citations','quote count'],
+  saves:['saves','save','bookmarks','bookmark','bookmark count','enregistrements','favoris'],
+  views:['vues','views','view count','impressions','plays','play count','lectures','video views'],
+  engagement:['social actions','engagements','engagement','engagement total','total engagement'],
+  visibility:['visibilite','visibility','reach','portee']
+};
+const normHdr=(s)=>String(s==null?'':s).normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase().replace(/[_\-.'’\/()\[\]]+/g,' ').replace(/\s+/g,' ').trim();
+const PLAT_ALIAS={x:'twitter',twitter:'twitter','twitter x':'twitter','x twitter':'twitter',tw:'twitter',fb:'facebook',facebook:'facebook',ig:'instagram',instagram:'instagram',insta:'instagram',yt:'youtube',youtube:'youtube',tiktok:'tiktok','tik tok':'tiktok',tt:'tiktok'};
+const normPlatCell=(v)=>PLAT_ALIAS[normHdr(v)]||'';
+function autoMap(cols){
+  const used=new Set(),map={};
+  for(const [k] of GEN_FIELDS){
+    map[k]=null;
+    for(const a of GEN_ALIASES[k]){const c=cols.find(x=>!used.has(x.c)&&normHdr(x.name)===a);if(c){map[k]=c.c;used.add(c.c);break;}}
   }
+  return map;
+}
+async function readSheetCols(sheetName){
+  return Excel.run(async(ctx)=>{
+    const wl=ctx.workbook.worksheets;wl.load('items/name');
+    const act=ctx.workbook.worksheets.getActiveWorksheet();act.load('name');await ctx.sync();
+    const name=sheetName||act.name;
+    const sh=ctx.workbook.worksheets.getItem(name);
+    const ur=sh.getUsedRangeOrNullObject(true);ur.load('rowIndex,columnIndex,rowCount,columnCount,isNullObject');await ctx.sync();
+    if(ur.isNullObject)throw new Error('La feuille « '+name+' » est vide.');
+    const hr=sh.getRangeByIndexes(ur.rowIndex,ur.columnIndex,1,ur.columnCount);hr.load('values');await ctx.sync();
+    return {sheet:name,sheets:wl.items.map(s=>s.name),headerRow:ur.rowIndex,
+      cols:hr.values[0].map((v,i)=>({c:ur.columnIndex+i,letter:colL(ur.columnIndex+i),name:String(v==null?'':v).trim()})).filter(x=>x.name!=='')};
+  });
+}
+async function applySelectionScope(pv){
+  const s=await getSel();
+  if(s.sheet!==pv.sheet)throw new Error('Sélectionnez des lignes dans l\'onglet « '+pv.sheet+' » (la sélection actuelle est dans « '+s.sheet+' »).');
+  pv.scope=new Set();s.areas.forEach(a=>{for(let k=0;k<a.rowCount;k++)pv.scope.add(a.rowIndex+k+1);});
+}
+async function loadGenericForUpdate(scope,gi,map){
+  const metricKeys=['likes','comments','shares','retweets','quotes','saves','views'].filter(k=>map[k]!=null);
+  if(map.id==null&&map.url==null)throw new Error('Choisissez au moins la colonne ID ou la colonne URL.');
+  if(!metricKeys.length)throw new Error('Choisissez au moins une colonne de mesure (likes, commentaires, vues…).');
+  const mapped=GEN_FIELDS.map(x=>x[0]).filter(k=>map[k]!=null);
+  const pv=await Excel.run(async(ctx)=>{
+    const sh=ctx.workbook.worksheets.getItem(gi.sheet);
+    const ur=sh.getUsedRange(true);ur.load('rowIndex,columnIndex,rowCount,columnCount');await ctx.sync();
+    const firstIdx=gi.headerRow+1,lastIdx=ur.rowIndex+ur.rowCount-1;
+    const rows=[];let unknown=0,bigIds=0;
+    for(let r0=firstIdx;r0<=lastIdx;r0+=20000){
+      const n=Math.min(20000,lastIdx-r0+1);
+      const rgs=mapped.map(k=>{const rg=sh.getRangeByIndexes(r0,map[k],n,1);rg.load('values');return rg;});
+      await ctx.sync();
+      for(let i=0;i<n;i++){
+        const g={};mapped.forEach((k,j)=>{const v=rgs[j].values[i][0];g[k]=v===''?null:v;});
+        const url=g.url!=null?String(g.url).trim():'';
+        let id='';
+        if(g.id!=null){
+          if(typeof g.id==='number'&&g.id>=1e15){bigIds++;}          // identifiant numérique tronqué par Excel : on repart de l'URL
+          else{id=String(g.id).trim();if(/^https?:\/\//i.test(id))id=idOnly(id)||'';}
+        }
+        if(!id&&url)id=idOnly(url)||'';
+        if(!id&&!url&&g.platform==null)continue;                           // ligne vide
+        let plat=g.platform!=null?normPlatCell(g.platform):'';
+        if(!plat){const pu=platOfUrl(url||(g.id!=null&&/^https?:/i.test(String(g.id))?String(g.id):''));plat=['facebook','instagram','twitter','youtube','tiktok'].indexOf(pu)>=0?pu:'';}
+        if(!plat)unknown++;
+        const o={row:r0+i+1,_plat:plat,_id:id||null,_url:url||null,_eng:g.engagement,_vis:g.visibility};
+        metricKeys.forEach(k=>{o[k]=g[k];});
+        rows.push(o);
+      }
+    }
+    let scopeSet=null;
+    if(scope==='visible'&&lastIdx>=firstIdx){
+      const kc=map.id!=null?map.id:map.url;
+      const rg=sh.getRangeByIndexes(firstIdx,kc,lastIdx-firstIdx+1,1);
+      const vis=rg.getSpecialCellsOrNullObject(Excel.SpecialCellType.visible);vis.load('isNullObject');await ctx.sync();
+      if(!vis.isNullObject){
+        vis.areas.load('items/rowIndex,items/rowCount');await ctx.sync();
+        const tot=vis.areas.items.reduce((a,x)=>a+x.rowCount,0);
+        if(tot<lastIdx-firstIdx+1){scopeSet=new Set();vis.areas.items.forEach(a=>{for(let k=0;k<a.rowCount;k++)scopeSet.add(a.rowIndex+k+1);});}
+      }
+    }
+    const have={};gi.cols.forEach(x=>{const k=x.name.toLowerCase();if(have[k]===undefined)have[k]=x.c;});
+    let next=ur.columnIndex+ur.columnCount;const newCols={};
+    MAJ_COLS.forEach(([k,label])=>{const c=have[label.toLowerCase()];if(c!==undefined)newCols[k]={c,name:label,exists:true};else newCols[k]={c:next++,name:label,exists:false};});
+    const cidx={};metricKeys.forEach(k=>{cidx[k]=map[k];});if(map.engagement!=null)cidx._eng=map.engagement;if(map.visibility!=null)cidx._vis=map.visibility;
+    const metrics={};['likes','comments','shares','retweets','quotes','saves','views'].forEach(k=>{metrics[k]=k;});
+    const P={name:'autre fichier',platform:'_plat',id:'_id',url:'_url',engagement:'_eng',visibility:'_vis',metrics,viewsByPlatform:{}};
+    const hdr={};gi.cols.forEach(x=>{hdr[x.c]=x.name;});MAJ_COLS.forEach(([k,label])=>{hdr[newCols[k].c]=label;});
+    return {sheet:gi.sheet,P,rows,scope:scopeSet,cidx,newCols,headerRow:gi.headerRow,firstIdx,lastIdx,hdr,metrics:new Set(metricKeys),generic:true,unknown,bigIds};
+  });
+  if(scope==='selection')await applySelectionScope(pv);
   return pv;
 }
 
@@ -2058,11 +2159,13 @@ function statusText(l,date){
     default:return 'Non trouvé dans l\'export '+date;
   }
 }
-function buildWrites(pv,res){
+function buildWrites(pv,res,opts){
+  const track=!opts||opts.track!==false;
   const P=pv.P,nc=pv.newCols,date=todayStr(),w=[],cnt={metricCells:0,rowsTouched:0,statuts:0};
-  const engL=colL(pv.cidx[P.engagement]),visL=colL(pv.cidx[P.visibility]);
+  const engC=pv.cidx[P.engagement],visC=pv.cidx[P.visibility];     // absentes en mode « autre fichier » si non choisies
+  const engL=engC===undefined?null:colL(engC),visL=visC===undefined?null:colL(visC);
   const aeL=colL(nc.eng.c),avL=colL(nc.vis.c);
-  if(res.lines.length)MAJ_COLS.forEach(([k])=>{if(!nc[k].exists)w.push({r:pv.headerRow,c:nc[k].c,v:nc[k].name,expect:'empty'});});
+  if(track&&res.lines.length)MAJ_COLS.forEach(([k])=>{if(!nc[k].exists)w.push({r:pv.headerRow,c:nc[k].c,v:nc[k].name,expect:'empty'});});
   for(const l of res.lines){
     const r0=l.row-1,xr=l.row;
     for(const m of Object.keys(l.changes)){
@@ -2070,12 +2173,16 @@ function buildWrites(pv,res){
       w.push({r:r0,c:pv.cidx[ch.column],v:ch.new,expect:ch.kind==='fill'?'empty':'eq',before:ch.old});cnt.metricCells++;
     }
     if(Object.values(l.changes).some(c=>c.kind==='fill'||c.kind==='raise'))cnt.rowsTouched++;
+    if(!track)continue;
     w.push({r:r0,c:nc.st.c,v:statusText(l,date),expect:'any'});cnt.statuts++;
     if(l.status!=='non_trouve'){
       if(l.engagement&&l.engagement.old!==null)w.push({r:r0,c:nc.eng.c,v:l.engagement.old,expect:'any'});
-      if(l.visibilityOld!==null&&l.visibilityOld!==undefined)w.push({r:r0,c:nc.vis.c,v:l.visibilityOld,expect:'any'});
-      w.push({r:r0,c:nc.deng.c,formula:`=IF(ISNUMBER(${engL}${xr}),${engL}${xr},0)-IF(ISNUMBER(${aeL}${xr}),${aeL}${xr},0)`,expect:'any'});
-      w.push({r:r0,c:nc.dvis.c,formula:`=IF(ISNUMBER(${visL}${xr}),${visL}${xr},0)-IF(ISNUMBER(${avL}${xr}),${avL}${xr},0)`,expect:'any'});
+      const visOld=(visL!==null)?l.visibilityOld:l.views.old;
+      if(visOld!==null&&visOld!==undefined)w.push({r:r0,c:nc.vis.c,v:visOld,expect:'any'});
+      if(engL!==null)w.push({r:r0,c:nc.deng.c,formula:`=IF(ISNUMBER(${engL}${xr}),${engL}${xr},0)-IF(ISNUMBER(${aeL}${xr}),${aeL}${xr},0)`,expect:'any'});
+      else w.push({r:r0,c:nc.deng.c,v:l.engagement.delta,expect:'any'});
+      if(visL!==null)w.push({r:r0,c:nc.dvis.c,formula:`=IF(ISNUMBER(${visL}${xr}),${visL}${xr},0)-IF(ISNUMBER(${avL}${xr}),${avL}${xr},0)`,expect:'any'});
+      else w.push({r:r0,c:nc.dvis.c,v:l.views.delta,expect:'any'});
     }
   }
   return {writes:w,counts:cnt};
@@ -2092,23 +2199,257 @@ async function selectDataRow(sheet,row){
   await Excel.run(async(ctx)=>{const ws=ctx.workbook.worksheets.getItem(sheet);ws.activate();ws.getRange(row+':'+row).select();await ctx.sync();});
 }
 
+/* ── détection automatique de la cible, comptage des lignes, journal et annulation ── */
+const LOG_SHEET='log_xt_tmf';
+const LOG_HDR=['Lot','Date et heure','Niveau','Outil','Feuille','Ligne','Résumé / détail','Données (annulation)','Annulé le'];
+const KEEP_LOTS=5;
+const LOGBUS={subs:new Set(),bump(){this.subs.forEach(f=>{try{f();}catch(e){}});}};
+const nowStr=()=>{const d=new Date(),p=(n)=>String(n).padStart(2,'0');return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+' '+p(d.getHours())+':'+p(d.getMinutes())+':'+p(d.getSeconds());};
+const colIdxOf=(L)=>String(L).split('').reduce((a,ch)=>a*26+ch.charCodeAt(0)-64,0)-1;
+const typeOfV=(v,isF)=>isF?'formule':(v===''||v===null||v===undefined)?'vide':typeof v==='number'?'nombre':'texte';
+const METRIC_KEYS=['likes','comments','shares','retweets','quotes','saves','views'];
+const genericReady=(m)=>!!m&&(m.id!=null||m.url!=null)&&METRIC_KEYS.some(k=>m[k]!=null);
+
+async function detectTarget(sheetName,force){
+  let act=null;
+  try{act=await readSheetCols(sheetName);}catch(e){if(sheetName)throw e;}
+  const mk=(g,kind)=>{
+    if(kind==='pivot'){const P=PivotUpd.detectPivotFormat(g.cols.map(x=>x.name));if(!P)throw new Error('La feuille « '+g.sheet+' » n\'a pas la structure d\'un pivot.');return {kind:'pivot',sheet:g.sheet,sheets:g.sheets,cols:g.cols,P,gi:g};}
+    return {kind:'generic',sheet:g.sheet,sheets:g.sheets,cols:g.cols,gi:g,gmap:autoMap(g.cols)};
+  };
+  if(act){
+    if(force==='generic')return mk(act,'generic');
+    if(force==='pivot')return mk(act,'pivot');
+    if(PivotUpd.detectPivotFormat(act.cols.map(x=>x.name)))return mk(act,'pivot');
+  }
+  if(!sheetName){
+    const names=(act&&act.sheets)||await Excel.run(async(ctx)=>{const wl=ctx.workbook.worksheets;wl.load('items/name');await ctx.sync();return wl.items.map(x=>x.name);});
+    const dn=names.find(x=>x.trim().toLowerCase()==='data');
+    if(dn&&(!act||dn!==act.sheet)){const d=await readSheetCols(dn);if(PivotUpd.detectPivotFormat(d.cols.map(x=>x.name))){d.sheets=names;return mk(d,'pivot');}}
+  }
+  if(!act)throw new Error('Aucune feuille exploitable : ouvrez le fichier à mettre à jour dans Excel.');
+  return mk(act,'generic');
+}
+function keyColOf(t){
+  if(!t)return null;
+  if(t.kind==='pivot'){const k=t.P.platform.trim().toLowerCase();const c=t.cols.find(x=>x.name.toLowerCase()===k);return c?c.c:null;}
+  const m=t.gmap||{};return m.id!=null?m.id:(m.url!=null?m.url:null);
+}
+async function countScopes(sheet,keyCol,firstIdx){
+  const sel=await getSel();
+  return Excel.run(async(ctx)=>{
+    const sh=ctx.workbook.worksheets.getItem(sheet);
+    const ur=sh.getUsedRange(true);ur.load('rowIndex,rowCount');await ctx.sync();
+    const lastIdx=ur.rowIndex+ur.rowCount-1;
+    if(lastIdx<firstIdx)return {all:0,visible:0,selection:0};
+    const filled=new Uint8Array(lastIdx-firstIdx+1);
+    for(let r0=firstIdx;r0<=lastIdx;r0+=20000){
+      const n=Math.min(20000,lastIdx-r0+1),rg=sh.getRangeByIndexes(r0,keyCol,n,1);rg.load('values');await ctx.sync();
+      for(let i=0;i<n;i++){const v=rg.values[i][0];if(v!==''&&v!==null)filled[r0-firstIdx+i]=1;}
+    }
+    let all=0;for(let i=0;i<filled.length;i++)all+=filled[i];
+    let visible=all;
+    const rg=sh.getRangeByIndexes(firstIdx,keyCol,lastIdx-firstIdx+1,1);
+    const vis=rg.getSpecialCellsOrNullObject(Excel.SpecialCellType.visible);vis.load('isNullObject');await ctx.sync();
+    if(!vis.isNullObject){
+      vis.areas.load('items/rowIndex,items/rowCount');await ctx.sync();visible=0;
+      for(const a of vis.areas.items)for(let k=0;k<a.rowCount;k++){const i=a.rowIndex+k-firstIdx;if(i>=0&&i<filled.length&&filled[i])visible++;}
+    }
+    const seen=new Set();
+    if(sel.sheet===sheet)for(const a of sel.areas)for(let k=0;k<a.rowCount;k++){const i=a.rowIndex+k-firstIdx;if(i>=0&&i<filled.length&&filled[i])seen.add(i);}
+    return {all,visible,selection:seen.size,selSheet:sel.sheet};
+  });
+}
+
+/* journal : feuille visible « log_xt_tmf ». Par mise à jour : 1 ligne « Résumé » + 1 ligne « Ligne » par ligne du pivot modifiée */
+const rangesOf=(rows,max)=>{
+  const a=[...new Set(rows)].sort((x,y)=>x-y),out=[];let i=0;
+  while(i<a.length){let j=i;while(j+1<a.length&&a[j+1]===a[j]+1)j++;out.push(a[i]===a[j]?String(a[i]):a[i]+'–'+a[j]);i=j+1;}
+  const m=max||6;return out.length>m?out.slice(0,m).join(', ')+' … ('+out.length+' plages)':out.join(', ');
+};
+async function openLog(ctx){
+  let ws=ctx.workbook.worksheets.getItemOrNullObject(LOG_SHEET);ws.load('isNullObject');await ctx.sync();
+  if(ws.isNullObject){
+    ws=ctx.workbook.worksheets.add(LOG_SHEET);
+    ws.getRange('A1:I1').values=[LOG_HDR];ws.getRange('A1:I1').format.font.bold=true;
+    ws.getRange('G:H').numberFormat='@';ws.freezePanes.freezeRows(1);await ctx.sync();
+  }
+  return ws;
+}
+async function appendLog(sheetName,lot,cells,hdr,meta){
+  if(!cells.length)return;
+  const byRow=new Map();cells.forEach(x=>{if(!byRow.has(x.r))byRow.set(x.r,[]);byRow.get(x.r).push(x);});
+  const rowsSorted=[...byRow.keys()].sort((x,y)=>x-y);
+  const tool=(meta&&meta.tool)||'Mise à jour Apify';
+  const out=[[lot,lot,'Résumé',tool,sheetName,'',(meta&&meta.summary)||(rowsSorted.length+' lignes, '+cells.length+' cellules'),'','']];
+  const show=(v)=>(v===''||v==null)?'vide':String(v);
+  for(const r of rowsSorted){
+    const it=byRow.get(r);
+    const txt=it.map(x=>(hdr[x.c]||colL(x.c))+' '+show(x.old)+'→'+(x.isF?'formule':show(x.nw))).join(' · ');
+    const js=JSON.stringify(it.map(x=>[x.c,(x.old===''||x.old==null)?null:x.old,x.nw,x.isF?1:0]));
+    out.push([lot,lot,'Ligne',tool,sheetName,r+1,txt.slice(0,900),js,'']);
+  }
+  await Excel.run(async(ctx)=>{
+    const ws=await openLog(ctx);
+    const ur=ws.getUsedRangeOrNullObject(true);ur.load('rowCount,isNullObject');await ctx.sync();
+    const start=ur.isNullObject?1:ur.rowCount;
+    for(let i=0;i<out.length;i+=5000){
+      const part=out.slice(i,i+5000);
+      ws.getRangeByIndexes(start+i,6,part.length,2).numberFormat='@';
+      ws.getRangeByIndexes(start+i,0,part.length,9).values=part;await ctx.sync();
+    }
+  });
+  LOGBUS.bump();
+}
+async function readLastBatch(){
+  return Excel.run(async(ctx)=>{
+    const ws=ctx.workbook.worksheets.getItemOrNullObject(LOG_SHEET);ws.load('isNullObject');await ctx.sync();
+    if(ws.isNullObject)return null;
+    const ur=ws.getUsedRangeOrNullObject(true);ur.load('rowCount,isNullObject');await ctx.sync();
+    if(ur.isNullObject||ur.rowCount<2)return null;
+    const N=ur.rowCount,A=[],C=[],D=[],E=[],G=[],H=[],I=[];
+    for(let r0=1;r0<N;r0+=20000){
+      const n=Math.min(20000,N-r0),rg=ws.getRangeByIndexes(r0,0,n,9);rg.load('values');await ctx.sync();
+      for(const v of rg.values){A.push(v[0]);C.push(v[2]);D.push(v[3]);E.push(v[4]);G.push(v[6]);H.push(v[7]);I.push(v[8]);}
+    }
+    let lots=0,last=-1;
+    for(let i=0;i<C.length;i++)if(C[i]==='Résumé'){lots++;if(I[i]===''&&H[i]!=='purgé')last=i;}
+    if(last<0)return {lot:null,lots};
+    let n=0;for(let i=last+1;i<C.length&&C[i]==='Ligne'&&A[i]===A[last];i++)n++;
+    return {lot:String(A[last]),rows:n,tool:String(D[last]),sheet:String(E[last]),text:String(G[last]),lots};
+  });
+}
+async function undoBatch(lot,onProg){
+  return withManualCalc(()=>Excel.run(async(ctx)=>{
+    const lw=ctx.workbook.worksheets.getItem(LOG_SHEET);
+    const ur=lw.getUsedRange(true);ur.load('rowCount');await ctx.sync();
+    const N=ur.rowCount,all=[];
+    for(let r0=1;r0<N;r0+=20000){
+      const n=Math.min(20000,N-r0),rg=lw.getRangeByIndexes(r0,0,n,9);rg.load('values');await ctx.sync();
+      rg.values.forEach((v,i)=>all.push({li:r0+i,v}));
+    }
+    let s=-1;for(let i=all.length-1;i>=0;i--){if(String(all[i].v[0])===lot&&all[i].v[2]==='Résumé'){s=i;break;}}
+    if(s<0)throw new Error('Lot introuvable dans le journal.');
+    const det=[];for(let i=s+1;i<all.length&&all[i].v[2]==='Ligne'&&String(all[i].v[0])===lot;i++)det.push(all[i]);
+    const items=[];
+    det.forEach((d,di)=>{let arr=[];try{arr=JSON.parse(d.v[7]);}catch(e){}arr.forEach(([c,old,nw,isF])=>items.push({di,sheet:String(d.v[4]),row:+d.v[5],col:c,old,nw,isF:!!isF}));});
+    let restored=0,skipped=0;const okByRow=det.map(()=>0),koByRow=det.map(()=>0);
+    for(let i=0;i<items.length;i+=500){
+      const part=items.slice(i,i+500);
+      const cells=part.map(e=>{const c=ctx.workbook.worksheets.getItem(e.sheet).getCell(e.row-1,e.col);c.load('values,formulas');return c;});
+      await ctx.sync();
+      part.forEach((e,k)=>{
+        const cur=cells[k].values[0][0],f=cells[k].formulas[0][0];
+        const same=e.isF?String(f)===String(e.nw):typeof e.nw==='number'?(cur!==''&&Number(cur)===e.nw):String(cur)===String(e.nw);
+        if(same){
+          if(e.old===null)cells[k].clear('Contents');else cells[k].values=[[e.old]];
+          restored++;okByRow[e.di]++;
+        }else{skipped++;koByRow[e.di]++;}
+      });
+      await ctx.sync();if(onProg)onProg(Math.min(i+500,items.length),items.length);
+    }
+    const stamp=nowStr();
+    const marks=[[stamp+' · '+restored+' restaurée(s)'+(skipped?', '+skipped+' non restaurée(s) (modifiées depuis)':'')]].concat(det.map((d,di)=>[stamp+' · '+(koByRow[di]?(okByRow[di]?'partiel':'non restauré (modifié depuis)'):'restauré')]));
+    const first=all[s].li;
+    for(let i=0;i<marks.length;i+=5000){
+      const part=marks.slice(i,i+5000);
+      lw.getRangeByIndexes(first+i,8,part.length,1).values=part;await ctx.sync();
+    }
+    return {restored,skipped,total:items.length};
+  })).then((r)=>{LOGBUS.bump();return r;});
+}
+/* garde le détail des N derniers lots, supprime celui des plus anciens (les résumés restent) */
+async function purgeLog(keep){
+  keep=keep||KEEP_LOTS;
+  return Excel.run(async(ctx)=>{
+    const ws=ctx.workbook.worksheets.getItemOrNullObject(LOG_SHEET);ws.load('isNullObject');await ctx.sync();
+    if(ws.isNullObject)return {lots:0,rows:0};
+    const ur=ws.getUsedRange(true);ur.load('rowCount');await ctx.sync();
+    const N=ur.rowCount,C=[];
+    for(let r0=1;r0<N;r0+=20000){
+      const n=Math.min(20000,N-r0),rg=ws.getRangeByIndexes(r0,2,n,1);rg.load('values');await ctx.sync();
+      rg.values.forEach(v=>C.push(v[0]));
+    }
+    const sums=[];C.forEach((x,i)=>{if(x==='Résumé')sums.push(i);});
+    const old=sums.slice(0,Math.max(0,sums.length-keep));
+    const spans=[];
+    for(const s of old){let e=s;while(e+1<C.length&&C[e+1]==='Ligne')e++;if(e>s)spans.push([s,e]);}
+    for(const [s] of spans){ws.getRangeByIndexes(s+1,7,1,1).values=[['purgé']];}
+    await ctx.sync();
+    let rows=0;
+    for(let k=spans.length-1;k>=0;k--){const [s,e]=spans[k];ws.getRange((s+3)+':'+(e+2)).delete(Excel.DeleteShiftDirection.up);rows+=e-s;await ctx.sync();}
+    return {lots:spans.length,rows};
+  }).then((r)=>{LOGBUS.bump();return r;});
+}
+
+/* affichage des seules lignes concernées (réversible) */
+async function showOnlyRows(sheet,firstRow,rows){
+  const nums=[...new Set(rows)].sort((a,b)=>a-b);if(!nums.length)return 0;
+  await Excel.run(async(ctx)=>{
+    const ws=ctx.workbook.worksheets.getItem(sheet);ws.activate();
+    const ur=ws.getUsedRange(true);ur.load('rowIndex,rowCount');await ctx.sync();
+    const last=ur.rowIndex+ur.rowCount;
+    ws.getRange(firstRow+':'+last).rowHidden=false;
+    const keep=new Set(nums);let a=null,n=0;
+    for(let r=firstRow;r<=last+1;r++){
+      const hide=r<=last&&!keep.has(r);
+      if(hide&&a===null)a=r;
+      if(!hide&&a!==null){ws.getRange(a+':'+(r-1)).rowHidden=true;a=null;n++;if(n%400===0)await ctx.sync();}
+    }
+    ws.getRange(nums[0]+':'+nums[0]).select();await ctx.sync();
+  });
+  return nums.length;
+}
+async function showAllRows(sheet,firstRow){
+  await Excel.run(async(ctx)=>{
+    const ws=ctx.workbook.worksheets.getItem(sheet);
+    const ur=ws.getUsedRange(true);ur.load('rowIndex,rowCount');await ctx.sync();
+    ws.getRange(firstRow+':'+(ur.rowIndex+ur.rowCount)).rowHidden=false;await ctx.sync();
+  });
+}
+
+/* ═════════ Assistant en 3 étapes ═════════ */
 function UpdateTab(p){
   const {onToast,onWritten}=p;
+  const [step,setStep]=useState('files');       // files → scope → review → done
   const [files,setFiles]=useState([]);
+  const [target,setTarget]=useState(null);
+  const [counts,setCounts]=useState(null);
   const [scope,setScope]=useState('visible');
+  const [picked,setPicked]=useState(false);
+  const [track,setTrack]=useState(true);
   const [plan,setPlan]=useState(null);
+  const [done,setDone]=useState(null);
+  const [last,setLast]=useState(null);
   const [busy,setBusy]=useState('');
   const [prog,setProg]=useState('');
   const [err,setErr]=useState('');
-  const [armed,setArmed]=useState(false);
   const [drag,setDrag]=useState(false);
-  const box={background:'#fff',border:'1px solid #e2e8f0',borderRadius:10,padding:'.65rem .75rem',marginBottom:10};
-  const td={padding:'3px 5px',borderBottom:'1px solid #f1f5f9',verticalAlign:'top',fontSize:'.72rem'};
-  const errBox=(t)=>h('div',{style:{background:'#fef2f2',border:'1px solid #fecaca',color:'#b91c1c',borderRadius:6,padding:'5px 8px',fontSize:'.74rem',marginTop:8}},t);
+  const [undoArmed,setUndoArmed]=useState(false);
+  const live=useRef({});live.current={target,picked,step};
   const msg=(e)=>String(e&&e.message?e.message:e);
+  const fr=(n)=>fmtN(n);
+  const pl=(n,a,b)=>n>1?(b||a+'s'):a;
 
+  const refreshLast=async()=>{try{setLast(await readLastBatch());}catch(e){setLast(null);}};
+  useEffect(()=>{refreshLast();},[]);
+
+  const recount=async(t,init)=>{
+    const kc=keyColOf(t);if(kc===null){setCounts(null);return;}
+    const c=await countScopes(t.sheet,kc,t.kind==='pivot'?2:t.gi.headerRow+1);
+    setCounts(c);
+    if(init||!live.current.picked)setScope(c.selection>1?'selection':(c.visible<c.all?'visible':'all'));
+  };
+  useEffect(()=>{
+    if(step!=='scope')return;
+    let timer=null;const fn=()=>{clearTimeout(timer);timer=setTimeout(()=>{const t=live.current.target;if(t&&live.current.step==='scope')recount(t,false).catch(()=>{});},500);};
+    try{Office.context.document.addHandlerAsync(Office.EventType.DocumentSelectionChanged,fn);}catch(e){}
+    return ()=>{clearTimeout(timer);try{Office.context.document.removeHandlerAsync(Office.EventType.DocumentSelectionChanged,{handler:fn});}catch(e){}};
+  },[step]);
+
+  /* étape 1 */
   const addFiles=async(list)=>{
-    setErr('');setPlan(null);setArmed(false);setBusy('read');
+    setErr('');setBusy('read');
     const out=[...files];
     for(const f of Array.from(list)){
       const it={name:f.name};
@@ -2117,107 +2458,454 @@ function UpdateTab(p){
         const {rows,warn}=await readExportFile(f);
         const r=ApifyN.normalizeExport(rows,f.name);
         Object.assign(it,{platform:r.platform,by:r.detectedBy,stats:r.stats,records:r.records,skipped:r.skipped,warn,rowsN:rows.length});
-        if(!r.platform)it.err='Source Apify non reconnue : ni le nom du fichier ni les colonnes ne correspondent.';
+        if(!r.platform)it.err='Fichier Apify non reconnu : ni le nom du fichier ni les colonnes ne correspondent. Gardez le nom d\'origine (ex. « dataset_instagram-scraper… »).';
       }catch(e){it.err=msg(e);}
       out.push(it);
     }
     setFiles(out);setBusy('');setProg('');
   };
+  const okFiles=files.filter(f=>f.records&&f.records.length);
+  const toScope=async(sheetName,force)=>{
+    setErr('');setBusy('detect');setProg('Lecture du classeur…');
+    try{const t=await detectTarget(sheetName,force);setTarget(t);setPlan(null);setStep('scope');await recount(t,true);}
+    catch(e){setErr(msg(e));}
+    setBusy('');setProg('');
+  };
+  /* étape 2 → 3 */
   const analyse=async()=>{
-    setErr('');setPlan(null);setArmed(false);setBusy('plan');
+    setErr('');setBusy('plan');
     try{
-      const ok=files.filter(f=>f.records&&f.records.length);
-      if(!ok.length)throw new Error('Déposez d\'abord au moins un export Apify reconnu.');
-      const recs=ok.flatMap(f=>f.records);
-      setProg('Lecture du pivot…');
-      const pv=await loadPivotForUpdate(scope);
-      setProg('Calcul…');await new Promise(r=>setTimeout(r,20));
+      const recs=okFiles.flatMap(f=>f.records);
+      setProg(target.kind==='pivot'?'Lecture du pivot…':'Lecture de la feuille…');
+      const pv=target.kind==='pivot'?await loadPivotForUpdate(scope,target.sheet):await loadGenericForUpdate(scope,target.gi,target.gmap);
+      setProg('Comparaison…');await new Promise(r=>setTimeout(r,20));
       const platforms=new Set(recs.map(r=>r.pivotPlatform));
-      const res=PivotUpd.planUpdate(pv.rows,recs,{cols:pv.P,extractId:idOnly,scope:pv.scope,platforms});
-      const wr=buildWrites(pv,res);
-      const notIn={};res.unmatchedRecords.forEach(r=>{notIn[r.pivotPlatform]=(notIn[r.pivotPlatform]||0)+1;});
-      setPlan({sheet:pv.sheet,fmt:pv.P.name,nrows:pv.rows.length,scopeN:pv.scope?pv.scope.size:null,res,writes:wr.writes,counts:wr.counts,notIn,newCols:MAJ_COLS.filter(([k])=>!pv.newCols[k].exists).length});
+      const res=PivotUpd.planUpdate(pv.rows,recs,{cols:pv.P,extractId:idOnly,scope:pv.scope,platforms,metrics:pv.metrics});
+      const wr=buildWrites(pv,res,{track});
+      setPlan({sheet:pv.sheet,kind:target.kind,nrows:pv.rows.length,scopeN:pv.scope?pv.scope.size:null,res,writes:wr.writes,counts:wr.counts,hdr:pv.hdr,firstRow:pv.firstIdx+1,track,scopeLabel:(scope==='all'?'tout le fichier':(scope==='selection'?'sélection':(counts&&counts.visible<counts.all?'données filtrées':'lignes visibles'))+(pv.scope?' · lignes '+rangesOf([...pv.scope]):'')),unknown:pv.unknown||0,bigIds:pv.bigIds||0,
+        newCols:MAJ_COLS.filter(([k])=>!pv.newCols[k].exists).length});
+      setStep('review');
     }catch(e){setErr(msg(e));}
     setBusy('');setProg('');
   };
-  const go=async()=>{
-    if(!armed){setArmed(true);return;}
-    setArmed(false);setBusy('write');setErr('');
+  /* étape 3 → 4 */
+  const write=async()=>{
+    setErr('');setBusy('write');
     try{
-      const r=await withManualCalc(()=>writeChanges(plan.sheet,plan.writes,(a,b)=>setProg('Écriture '+a+' / '+b+'…')));
-      onToast((plan.counts.rowsTouched)+' ligne'+(plan.counts.rowsTouched>1?'s':'')+' mise'+(plan.counts.rowsTouched>1?'s':'')+' à jour ('+r.n+' cellules écrites'+(r.skipped?' · '+r.skipped+' non touchée'+(r.skipped>1?'s':'')+' car modifiée'+(r.skipped>1?'s':'')+' entre-temps':'')+').');
-      setPlan(null);onWritten&&onWritten();
+      const collect=[];
+      const r=await withManualCalc(()=>writeChanges(plan.sheet,plan.writes,(a,b)=>setProg('Écriture '+fr(a)+' / '+fr(b)+'…'),collect));
+      setProg('Journal…');
+      const lot=nowStr();let logErr='';
+      const L=plan.res.lines,S0=plan.res.summary;
+      const meta={tool:'Mise à jour Apify',summary:'Périmètre : '+plan.scopeLabel+' · exports : '+okFiles.map(f=>f.name.replace(/^[0-9a-f]{8}-/,'')+' ('+(PLAT_LABEL[f.platform]||f.platform)+', '+f.records.length+')').join(' ; ')+' · '+plan.counts.rowsTouched+' lignes et '+r.n+' cellules modifiées · '+L.filter(l=>l.flags.some(f=>f.indexOf('baisse_')===0)).length+' baisses ignorées · '+S0.non_trouve+' non retrouvées'};
+      try{await appendLog(plan.sheet,lot,collect,plan.hdr,meta);}catch(e){logErr=msg(e);}
+      setDone({sheet:plan.sheet,firstRow:plan.firstRow,rows:plan.counts.rowsTouched,cells:r.n,skipped:r.skipped,logErr,
+        updated:L.filter(l=>l.status==='mis_a_jour'||l.status==='mis_a_jour_avec_baisse').map(l=>l.row),
+        notFound:L.filter(l=>l.status==='non_trouve').map(l=>l.row)});
+      setStep('done');refreshLast();onWritten&&onWritten();
     }catch(e){setErr(msg(e));}
     setBusy('');setProg('');
   };
+  const undo=async()=>{
+    if(!undoArmed){setUndoArmed(true);return;}
+    setUndoArmed(false);setErr('');setBusy('undo');
+    try{
+      const r=await undoBatch(last.lot,(a,b)=>setProg('Restauration '+fr(a)+' / '+fr(b)+'…'));
+      onToast(r.restored+' cellule'+pl(r.restored,'')+' restaurée'+pl(r.restored,'')+(r.skipped?' · '+r.skipped+' laissée'+pl(r.skipped,'')+' telle'+pl(r.skipped,'','s')+' quelle'+pl(r.skipped,'','s')+' (modifiée'+pl(r.skipped,'')+' depuis)':'')+'.');
+      setDone(null);setPlan(null);setStep('files');await refreshLast();onWritten&&onWritten();
+    }catch(e){setErr(msg(e));}
+    setBusy('');setProg('');
+  };
+  const reset=()=>{setStep('files');setFiles([]);setPlan(null);setDone(null);setErr('');setTarget(null);setCounts(null);setPicked(false);setUndoArmed(false);};
 
-  const S=plan?plan.res.summary:null;
-  const rowLinks=(rows,max)=>rows.slice(0,max||12).map((x,i)=>h('span',{key:x},i?', ':'',h('span',{className:'rl',onClick:()=>selectDataRow(plan.sheet,x)},x))).concat(rows.length>(max||12)?[h('span',{key:'+'},' … (+'+(rows.length-(max||12))+')')]:[]);
+  /* ── présentation ── */
+  const box={background:'#fff',border:'1px solid #e2e8f0',borderRadius:10,padding:'.7rem .8rem',marginBottom:10};
+  const big={padding:'9px 14px',fontSize:'.84rem'};
+  const td={padding:'3px 5px',borderBottom:'1px solid #f1f5f9',verticalAlign:'top',fontSize:'.72rem'};
+  const spin=busy?h('span',{style:{display:'inline-block',width:12,height:12,border:'2px solid #cbd5e1',borderTopColor:'#2563eb',borderRadius:'50%',animation:'spin .8s linear infinite',marginRight:6,verticalAlign:'-2px'}}):null;
+  const status=busy?h('div',{style:{fontSize:'.76rem',color:'#475569',marginTop:8}},spin,prog||'En cours…'):null;
+  const errBox=err?h('div',{style:{background:'#fef2f2',border:'1px solid #fecaca',color:'#b91c1c',borderRadius:6,padding:'6px 9px',fontSize:'.76rem',marginTop:8}},err):null;
+  const stepsBar=h('div',{style:{display:'flex',gap:4,marginBottom:10,fontSize:'.7rem',fontWeight:700}},
+    [['files','1 · Fichiers'],['scope','2 · Lignes'],['review','3 · Vérifier']].map(([k,l],i)=>{
+      const order=['files','scope','review','done'],cur=order.indexOf(step),me=order.indexOf(k);
+      return h('div',{key:k,style:{flex:1,textAlign:'center',padding:'4px 2px',borderRadius:6,background:step==='done'||me<cur?'#dcfce7':me===cur?'#1e293b':'#f1f5f9',color:step==='done'||me<cur?'#166534':me===cur?'#fff':'#94a3b8'}},(step==='done'||me<cur?'✓ ':'')+l);}));
+  const backBtn=(to)=>h('button',{style:{...BTN_N,...big},disabled:!!busy,onClick:()=>{setErr('');setStep(to);}},'← Retour');
+  const sel=(on)=>({border:'2px solid '+(on?'#2563eb':'#e2e8f0'),background:on?'#eff6ff':'#fff',borderRadius:8,padding:'8px 10px',marginBottom:6,cursor:'pointer'});
+  const rowLinks=(sheet,rows,max)=>rows.slice(0,max||12).map((x,i)=>h('span',{key:x},i?', ':'',h('span',{className:'rl',onClick:()=>selectDataRow(sheet,x)},x))).concat(rows.length>(max||12)?[h('span',{key:'+'},' … (+'+(rows.length-(max||12))+')')]:[]);
   const copyRows=(rows)=>h('button',{style:{...BTN_N,padding:'1px 7px',fontSize:'.68rem',marginLeft:6},onClick:()=>copyText(rows.join(', '),(ok)=>onToast(ok?'Numéros de lignes copiés.':'Copie impossible.'))},'📋 Copier');
-  const lines=plan?plan.res.lines:[];
-  const drops=lines.filter(l=>l.flags.some(f=>f.indexOf('baisse_')===0));
-  const notFound=lines.filter(l=>l.status==='non_trouve');
-  const changed=lines.filter(l=>l.status==='mis_a_jour'||l.status==='mis_a_jour_avec_baisse');
-  const chip=(t,c,bg)=>h('span',{style:{background:bg,color:c,borderRadius:99,padding:'2px 8px',fontSize:'.72rem',fontWeight:700,marginRight:5,display:'inline-block',marginBottom:4}},t);
 
-  return h('div',null,
-    h('div',{style:{background:'#eff6ff',border:'1px solid #bfdbfe',borderRadius:8,padding:'6px 10px',fontSize:'.74rem',color:'#1e3a8a',marginBottom:10,lineHeight:1.5}},
-      "Déposez les exports bruts d'Apify (JSON, CSV ou XLSX). La plateforme est reconnue d'après le nom du fichier, sinon d'après ses colonnes. Les lignes du pivot sont retrouvées par plateforme + ID (ou ID extrait de l'URL) ; pour chaque mesure on garde la plus haute valeur. Rien n'est écrit sans confirmation."),
+  /* étape 1 : fichiers */
+  const screenFiles=()=>h('div',null,
+    last&&last.lot?h('div',{style:{...box,background:'#fffbeb',borderColor:'#fde68a'}},
+      h('div',{style:{fontSize:'.76rem',color:'#78350f',marginBottom:6}},h('strong',null,'Dernière mise à jour : '),last.lot+' · '+fr(last.rows)+' ligne'+pl(last.rows,'')+' · feuille « '+last.sheet+' »'),
+      h('button',{style:undoArmed?{...BTN_F,padding:'5px 10px'}:{...BTN_N,padding:'5px 10px'},disabled:!!busy,onClick:undo},undoArmed?'⚠️ Confirmer l\'annulation':'↩️ Annuler cette mise à jour'),
+      undoArmed?h('button',{style:{...BTN_N,marginLeft:6},onClick:()=>setUndoArmed(false)},'Non'):null,
+      h('div',{style:{fontSize:'.7rem',color:'#92400e',marginTop:6}},last.text),
+      last.lots>KEEP_LOTS?h('div',{style:{marginTop:6}},h('span',{className:'rl',style:{fontSize:'.72rem'},onClick:busy?undefined:purge},'🧹 Nettoyer le journal (garde le détail des '+KEEP_LOTS+' dernières mises à jour)')):null,
+      h('div',{style:{fontSize:'.7rem',color:'#92400e',marginTop:6}},'Les anciennes valeurs sont rétablies, sauf pour les cellules que vous avez modifiées depuis. Le détail est dans l\'onglet « '+LOG_SHEET+' ».')):null,
     h('div',{style:box},
-      h('div',{style:{fontWeight:800,fontSize:'.86rem',marginBottom:6}},'1 · Exports Apify'),
+      h('div',{style:{fontWeight:800,fontSize:'.9rem',marginBottom:4}},'Déposez vos exports Apify'),
+      h('div',{style:{fontSize:'.74rem',color:'#64748b',marginBottom:8,lineHeight:1.5}},'Fichiers bruts au format JSON, CSV ou Excel, un ou plusieurs (une plateforme par fichier). Gardez leur nom d\'origine : c\'est lui qui indique la plateforme.'),
       h('label',{onDragOver:(e)=>{e.preventDefault();setDrag(true);},onDragLeave:()=>setDrag(false),onDrop:(e)=>{e.preventDefault();setDrag(false);if(e.dataTransfer&&e.dataTransfer.files.length)addFiles(e.dataTransfer.files);},
-        style:{display:'block',border:'2px dashed '+(drag?'#2563eb':'#cbd5e1'),background:drag?'#eff6ff':'#f8fafc',borderRadius:8,padding:'14px 8px',textAlign:'center',fontSize:'.76rem',color:'#475569',cursor:'pointer'}},
-        'Glissez les fichiers ici ou cliquez pour les choisir',
+        style:{display:'block',border:'2px dashed '+(drag?'#2563eb':'#cbd5e1'),background:drag?'#eff6ff':'#f8fafc',borderRadius:8,padding:'18px 8px',textAlign:'center',fontSize:'.78rem',color:'#475569',cursor:'pointer'}},
+        '📂 Glissez les fichiers ici ou cliquez pour les choisir',
         h('input',{type:'file',multiple:true,accept:'.json,.csv,.xlsx,.xls,.txt',style:{display:'none'},onChange:(e)=>{if(e.target.files.length)addFiles(e.target.files);e.target.value='';}})),
       files.length?h('div',{style:{marginTop:8}},files.map((f,i)=>h('div',{key:i,style:{border:'1px solid '+(f.err?'#fecaca':'#e2e8f0'),background:f.err?'#fef2f2':'#fff',borderRadius:6,padding:'5px 8px',marginBottom:5,fontSize:'.73rem'}},
         h('div',{style:{display:'flex',justifyContent:'space-between',gap:6}},
-          h('strong',{style:{wordBreak:'break-all'}},f.name),
-          h('span',{className:'rl',onClick:()=>{setFiles(files.filter((_,j)=>j!==i));setPlan(null);}},'retirer')),
+          h('strong',{style:{wordBreak:'break-all'}},(f.err?'❌ ':'✅ ')+f.name),
+          h('span',{className:'rl',onClick:()=>setFiles(files.filter((_,j)=>j!==i))},'retirer')),
         f.err?h('div',{style:{color:'#b91c1c'}},f.err):h('div',{style:{color:'#475569'}},
-          (PLAT_LABEL[f.platform]||f.platform)+' ('+(f.by==='nom_de_fichier'?'reconnu par le nom':'reconnu par les colonnes')+') · '+f.stats.kept+' contenu'+(f.stats.kept>1?'s':'')+' sur '+f.rowsN+' lignes'+
-          (f.stats.skipped?' · '+f.stats.skipped+' ignorée'+(f.stats.skipped>1?'s':'')+' ('+[...new Set(f.skipped.map(s=>s.reason))].slice(0,3).join(' ; ')+')':'')+
-          (f.stats.duplicateKeys?' · '+f.stats.duplicateKeys+' doublon(s)':'')),
-        (f.warn||[]).map((x,k)=>h('div',{key:k,style:{color:'#b45309'}},'⚠️ '+x))))):null),
-    h('div',{style:box},
-      h('div',{style:{fontWeight:800,fontSize:'.86rem',marginBottom:6}},'2 · Lignes du pivot à mettre à jour'),
-      h('div',{style:{display:'flex',gap:6,flexWrap:'wrap',marginBottom:8}},
-        modeBtn2(scope,setScope,'selection','Sélection actuelle'),
-        modeBtn2(scope,setScope,'visible','Données filtrées'),
-        modeBtn2(scope,setScope,'all','Tout le pivot')),
-      h('div',{style:{fontSize:'.7rem',color:'#64748b',marginBottom:8}},scope==='selection'?'Les lignes touchées par votre sélection dans l\'onglet DATA (une cellule suffit pour une ligne).':scope==='visible'?'Seules les lignes affichées dans DATA sont traitées (filtres actifs ; sans filtre, c\'est tout le pivot).':'Toutes les lignes de DATA, filtres et lignes masquées compris.'),
-      h('button',{style:BTN_B,disabled:!!busy||!files.some(f=>f.records&&f.records.length),onClick:analyse},busy==='plan'?'Analyse…':'🔎 Analyser'),
-      busy&&prog?h('span',{style:{marginLeft:8,fontSize:'.74rem',color:'#64748b'}},prog):null,
-      err?errBox(err):null),
-    plan?h('div',{style:box},
-      h('div',{style:{fontWeight:800,fontSize:'.86rem',marginBottom:6}},'3 · Aperçu'),
-      h('div',{style:{fontSize:'.72rem',color:'#64748b',marginBottom:8}},'Feuille « '+plan.sheet+' » · format '+plan.fmt+' · '+fmtN(plan.nrows)+' lignes lues · périmètre : '+(plan.scopeN===null?'toutes les lignes':fmtN(plan.scopeN)+' lignes')+' · plateformes traitées : '+[...new Set(lines.map(l=>l.platform))].join(', ')),
-      h('div',null,
-        chip('✅ '+S.mis_a_jour+' mise'+(S.mis_a_jour>1?'s':'')+' à jour','#166534','#dcfce7'),
-        S.mis_a_jour_avec_baisse?chip('⚠️ '+S.mis_a_jour_avec_baisse+' avec baisse ignorée','#92400e','#fef3c7'):null,
-        S.baisse_signalee?chip('⚠️ '+S.baisse_signalee+' baisse ignorée seule','#92400e','#fef3c7'):null,
-        chip('= '+S.inchange+' inchangée'+(S.inchange>1?'s':''),'#475569','#f1f5f9'),
-        chip('❓ '+S.non_trouve+' non trouvée'+(S.non_trouve>1?'s':''),'#9a3412','#ffedd5')),
-      changed.length?h('div',{style:{overflowX:'auto',margin:'6px 0 8px'}},h('table',{style:{width:'100%',borderCollapse:'collapse'}},h('tbody',null,
-        changed.slice(0,8).map((l,i)=>h('tr',{key:i},
-          h('td',{style:{...td,color:'#94a3b8'}},h('span',{className:'rl',onClick:()=>selectDataRow(plan.sheet,l.row)},l.row)),
-          h('td',{style:td},l.platform),
-          h('td',{style:td},Object.entries(l.changes).filter(([m,c])=>c.kind!=='drop').map(([m,c])=>m+' '+(c.old===null?'—':fmtN(c.old))+' → '+fmtN(c.new)).join(' · ')),
-          h('td',{style:{...td,color:l.engagement.delta?'#166534':'#64748b',whiteSpace:'nowrap'}},l.engagement.delta?'eng. '+(l.engagement.delta>0?'+':'')+fmtN(l.engagement.delta):'')))))):null,
-      drops.length?h('div',{style:{fontSize:'.74rem',color:'#92400e',background:'#fffbeb',border:'1px solid #fde68a',borderRadius:6,padding:'5px 8px',marginBottom:6}},
-        h('strong',null,'Baisses ignorées ('+drops.length+') : '),'l\'export est plus bas que le pivot, l\'ancienne valeur est conservée. Lignes ',rowLinks(drops.map(l=>l.row)),copyRows(drops.map(l=>l.row))):null,
-      notFound.length?h('div',{style:{fontSize:'.74rem',color:'#9a3412',background:'#fff7ed',border:'1px solid #fed7aa',borderRadius:6,padding:'5px 8px',marginBottom:6}},
-        h('strong',null,'Non trouvées dans les exports ('+notFound.length+') : '),'post supprimé, compte non collecté ou ID différent. Les données passées sont conservées. Lignes ',rowLinks(notFound.map(l=>l.row)),copyRows(notFound.map(l=>l.row))):null,
-      (S.doublonsPivot||S.doublonsExport)?h('div',{style:{fontSize:'.73rem',color:'#475569',marginBottom:6}},(S.doublonsPivot?S.doublonsPivot+' ligne(s) du pivot partagent un même ID (toutes mises à jour). ':'')+(S.doublonsExport?S.doublonsExport+' contenu(s) présent(s) plusieurs fois dans les exports (maximum retenu).':'')):null,
-      S.exportRecordsNotInPivot?h('div',{style:{fontSize:'.73rem',color:'#64748b',marginBottom:6}},fmtN(S.exportRecordsNotInPivot)+' contenu'+(S.exportRecordsNotInPivot>1?'s':'')+' des exports ne figurent pas dans le pivot (ni dans le périmètre choisi) : ignoré'+(S.exportRecordsNotInPivot>1?'s':'')+'.'):null,
-      plan.res.lines.some(l=>l.flags.includes('retweet'))?h('div',{style:{fontSize:'.72rem',color:'#64748b',marginBottom:6}},'Retweets X : les performances sont celles du tweet d\'origine (comportement d\'Apify).'):null,
-      h('div',{style:{fontSize:'.72rem',color:'#64748b',marginBottom:8}},'Colonnes de suivi'+(plan.newCols?' (à créer à la suite du tableau : '+plan.newCols+')':'')+' : ancien engagement total, ancienne visibilité, statut de mise à jour, écart engagement, écart visibilité.'),
-      plan.writes.length?h('div',null,
-        h('button',{style:armed?{...BTN_F,padding:'6px 12px'}:{...BTN_B,padding:'6px 12px'},disabled:!!busy,onClick:go},
-          busy==='write'?('Écriture…'+(prog?' '+prog:'')):armed?'⚠️ Confirmer : écrire '+fmtN(plan.writes.length)+' cellules (non annulable par Ctrl+Z)':'✍️ Mettre à jour le pivot ('+fmtN(plan.writes.length)+' cellules)'),
-        armed?h('button',{style:{...BTN_N,marginLeft:6},onClick:()=>setArmed(false)},'Annuler'):null,
-        armed?h('div',{style:{fontSize:'.7rem',color:'#64748b',marginTop:6}},'Le recalcul automatique est suspendu pendant l\'écriture puis rétabli : Excel recalcule ensuite tout le classeur, ce qui peut prendre un moment. Enregistrez une copie du fichier avant de continuer si besoin.'):null):
-        h('div',{style:{fontSize:'.76rem',color:'#64748b'}},'Rien à écrire.'),
-      err?errBox(err):null):null);
+          (PLAT_LABEL[f.platform]||f.platform)+' · '+fr(f.stats.kept)+' publication'+pl(f.stats.kept,'')+(f.stats.skipped?' ('+f.stats.skipped+' ligne'+pl(f.stats.skipped,'')+' sans publication ignorée'+pl(f.stats.skipped,'')+')':'')),
+        (f.warn||[]).map((x,k)=>h('div',{key:k,style:{color:'#b45309'}},'⚠️ '+x))))):null,
+      status,errBox),
+    h('button',{style:{...BTN_B,...big,width:'100%'},disabled:!!busy||!okFiles.length,onClick:()=>toScope()},'Continuer →'));
+
+  /* étape 2 : quelles lignes */
+  const setMapField=(k,v)=>setTarget({...target,gmap:{...target.gmap,[k]:v===''?null:+v}});
+  const screenScope=()=>{
+    if(!target)return null;
+    const gen=target.kind==='generic',ready=!gen||genericReady(target.gmap),c=counts;
+    const cards=[
+      ['selection','Ma sélection',c?c.selection:0,c&&c.selection===0?(c.selSheet&&c.selSheet!==target.sheet?'Votre sélection est dans une autre feuille.':'Sélectionnez des lignes dans Excel.'):'Les lignes que vous avez sélectionnées maintenant dans Excel.'],
+      ['visible','Données filtrées',c?c.visible:0,'Les lignes visibles : fonctionne avec vos filtres.'+(c&&c.visible===c.all?' (Aucun filtre actif pour l\'instant.)':'')],
+      ['all','Tout le fichier',c?c.all:0,'Toutes les lignes, y compris celles que vos filtres cachent.']];
+    return h('div',null,
+      h('div',{style:box},
+        h('div',{style:{fontWeight:800,fontSize:'.9rem',marginBottom:4}},'Quelles lignes mettre à jour ?'),
+        h('div',{style:{fontSize:'.74rem',color:'#475569',marginBottom:8}},gen
+          ?(ready?'Feuille « '+target.sheet+' » : colonnes reconnues ✓':'Feuille « '+target.sheet+' » : indiquez les colonnes ci-dessous.')
+          :'Feuille « '+target.sheet+' » : pivot reconnu ✓'),
+        cards.map(([k,t,n,d])=>h('div',{key:k,onClick:()=>{if(n>0||!c){setScope(k);setPicked(true);}},style:{...sel(scope===k),opacity:c&&n===0?.5:1,cursor:c&&n===0?'not-allowed':'pointer'}},
+          h('div',{style:{display:'flex',justifyContent:'space-between',fontWeight:700,fontSize:'.8rem'}},h('span',null,(scope===k?'◉ ':'○ ')+t),h('span',null,c?fr(n)+' ligne'+pl(n,''):'…')),
+          h('div',{style:{fontSize:'.71rem',color:'#64748b',marginTop:2}},d))),
+        h('div',{style:{textAlign:'right'}},h('span',{className:'rl',style:{fontSize:'.72rem'},onClick:()=>recount(target,false).catch((e)=>setErr(msg(e)))},'↻ Actualiser les nombres'))),
+      gen?h('details',{key:'map'+ready,open:!ready,style:{...box,padding:'.5rem .8rem'}},
+        h('summary',{style:{cursor:'pointer',fontWeight:700,fontSize:'.8rem'}},ready?'Colonnes reconnues (modifier)':'⚠️ Colonnes à indiquer'),
+        h('div',{style:{fontSize:'.7rem',color:'#64748b',margin:'6px 0'}},'Il faut une colonne ID ou URL, et au moins une mesure. La 1re ligne de la feuille doit contenir les noms de colonnes.'),
+        h('div',{style:{display:'grid',gridTemplateColumns:'auto 1fr',gap:'4px 8px',alignItems:'center',fontSize:'.74rem'}},
+          GEN_FIELDS.map(([k,label])=>[
+            h('span',{key:'l'+k,style:{color:'#334155'}},label),
+            h(Picker,{key:'p'+k,value:target.gmap[k]==null?'':String(target.gmap[k]),onChange:(v)=>setMapField(k,v),options:[{value:'',label:'— aucune —'}].concat(target.cols.map(x=>({value:String(x.c),label:x.letter+' · '+x.name})))})]))):null,
+      h('details',{style:{...box,padding:'.5rem .8rem'}},
+        h('summary',{style:{cursor:'pointer',fontWeight:700,fontSize:'.8rem'}},'Options avancées'),
+        h('div',{style:{marginTop:8,fontSize:'.75rem'}},
+          h('div',{style:{marginBottom:6}},h('span',{style:{color:'#64748b',marginRight:6}},'Feuille à mettre à jour'),
+            h(Picker,{value:target.sheet,onChange:(v)=>toScope(v),options:target.sheets.map(x=>({value:x,label:x}))})),
+          h('div',{style:{display:'flex',gap:6,flexWrap:'wrap',marginBottom:6}},
+            modeBtn2(target.kind,(m)=>toScope(target.sheet,m),'pivot','Traiter comme un pivot'),
+            modeBtn2(target.kind,(m)=>toScope(target.sheet,m),'generic','Traiter comme un autre fichier')),
+          h('div',{style:{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}},
+            h('span',{style:{color:'#64748b'}},'Colonnes de suivi'),
+            modeBtn2(track,setTrack,true,'Ajouter (ancien, statut, écart)'),
+            modeBtn2(track,setTrack,false,'Non')))),
+      errBox,status,
+      h('div',{style:{display:'flex',gap:6}},backBtn('files'),
+        h('button',{style:{...BTN_B,...big,flex:1},disabled:!!busy||!ready||!c||!c[scope],onClick:analyse},'Voir ce qui va changer →')));
+  };
+
+  /* étape 3 : vérifier */
+  const screenReview=()=>{
+    if(!plan)return null;
+    const S=plan.res.summary,L=plan.res.lines,n=plan.counts.rowsTouched;
+    const drops=L.filter(l=>l.flags.some(f=>f.indexOf('baisse_')===0)),notFound=L.filter(l=>l.status==='non_trouve'),changed=L.filter(l=>l.status==='mis_a_jour'||l.status==='mis_a_jour_avec_baisse');
+    const line=(ic,txt,col)=>h('div',{style:{fontSize:'.78rem',color:col||'#334155',marginBottom:4}},ic+' '+txt);
+    return h('div',null,
+      h('div',{style:box},
+        h('div',{style:{fontWeight:800,fontSize:'1rem',marginBottom:8,color:n?'#166534':'#475569'}},n
+          ?fr(n)+' ligne'+pl(n,'')+(n>1?' vont':' va')+' être mise'+pl(n,'')+' à jour'
+          :'Rien à mettre à jour'),
+        n?line('✅',fr(plan.counts.metricCells)+' valeur'+pl(plan.counts.metricCells,'')+' à modifier (hausses ou cases vides à compléter)','#166534'):line('ℹ️','Les valeurs des exports sont identiques ou inférieures à celles du fichier.'),
+        S.inchange?line('⏸',fr(S.inchange)+' ligne'+pl(S.inchange,'')+' déjà à jour'):null,
+        drops.length?line('⚠️',drops.length+' ligne'+pl(drops.length,'')+' où l\'export est plus bas que le fichier : l\'ancienne valeur est conservée','#92400e'):null,
+        notFound.length?line('❓',notFound.length+' ligne'+pl(notFound.length,'')+' du fichier absente'+pl(notFound.length,'')+' des exports (post supprimé ou non collecté) : données conservées','#9a3412'):null,
+        S.exportRecordsNotInPivot?line('ℹ️',fr(S.exportRecordsNotInPivot)+' publication'+pl(S.exportRecordsNotInPivot,'')+' des exports n\'étai'+(S.exportRecordsNotInPivot>1?'ent':'t')+' pas dans les lignes choisies (ignorée'+pl(S.exportRecordsNotInPivot,'')+')','#64748b'):null,
+        plan.unknown?line('⚠️',plan.unknown+' ligne'+pl(plan.unknown,'')+' sans plateforme reconnue ignorée'+pl(plan.unknown,''),'#b45309'):null,
+        plan.bigIds?line('⚠️',plan.bigIds+' ID tronqué'+pl(plan.bigIds,'')+' par Excel : repris depuis l\'URL quand elle existe','#b45309'):null),
+      (changed.length||drops.length||notFound.length)?h('details',{style:{...box,padding:'.5rem .8rem'}},
+        h('summary',{style:{cursor:'pointer',fontWeight:700,fontSize:'.8rem'}},'Voir le détail'),
+        changed.length?h('div',{style:{overflowX:'auto',margin:'8px 0'}},h('table',{style:{width:'100%',borderCollapse:'collapse'}},h('tbody',null,
+          changed.slice(0,10).map((l,i)=>h('tr',{key:i},
+            h('td',{style:{...td,color:'#94a3b8'}},h('span',{className:'rl',onClick:()=>selectDataRow(plan.sheet,l.row)},l.row)),
+            h('td',{style:td},l.platform),
+            h('td',{style:td},Object.entries(l.changes).filter(([m,c])=>c.kind!=='drop').map(([m,c])=>m+' '+(c.old===null?'—':fr(c.old))+' → '+fr(c.new)).join(' · ')))))),
+          changed.length>10?h('div',{style:{fontSize:'.7rem',color:'#94a3b8'}},'… et '+(changed.length-10)+' autres'):null):null,
+        drops.length?h('div',{style:{fontSize:'.74rem',color:'#92400e',marginBottom:6}},h('strong',null,'Baisses ignorées : '),'lignes ',rowLinks(plan.sheet,drops.map(l=>l.row)),copyRows(drops.map(l=>l.row))):null,
+        notFound.length?h('div',{style:{fontSize:'.74rem',color:'#9a3412',marginBottom:6}},h('strong',null,'Non retrouvées : '),'lignes ',rowLinks(plan.sheet,notFound.map(l=>l.row)),copyRows(notFound.map(l=>l.row))):null,
+        (S.doublonsPivot||S.doublonsExport)?h('div',{style:{fontSize:'.72rem',color:'#475569'}},(S.doublonsPivot?S.doublonsPivot+' ligne(s) du fichier partagent un même ID (toutes mises à jour). ':'')+(S.doublonsExport?S.doublonsExport+' publication(s) présente(s) plusieurs fois dans les exports (valeur la plus haute retenue).':'')):null,
+        L.some(l=>l.flags.includes('retweet'))?h('div',{style:{fontSize:'.72rem',color:'#64748b',marginTop:4}},'Retweets X : les chiffres sont ceux du tweet d\'origine (comportement d\'Apify).'):null):null,
+      errBox,status,
+      h('div',{style:{display:'flex',gap:6}},backBtn('scope'),
+        n||plan.writes.length?h('button',{style:{...BTN_B,...big,flex:1},disabled:!!busy||!plan.writes.length,onClick:write},busy==='write'?'Mise à jour…':(n?'Mettre à jour '+fr(n)+' ligne'+pl(n,''):'Écrire le suivi ('+fr(plan.writes.length)+' cellules)')):null),
+      !busy&&plan.writes.length?h('div',{style:{fontSize:'.7rem',color:'#64748b',marginTop:8,lineHeight:1.5}},'Toutes les modifications sont consignées dans l\'onglet « '+LOG_SHEET+' » et pourront être annulées. Le recalcul d\'Excel est suspendu pendant l\'écriture puis relancé : il peut prendre un moment sur un gros fichier.'):null);
+  };
+
+  /* étape 4 : terminé */
+  const screenDone=()=>{
+    if(!done)return null;
+    const d=done;
+    return h('div',null,
+      h('div',{style:{...box,background:'#f0fdf4',borderColor:'#bbf7d0'}},
+        h('div',{style:{fontWeight:800,fontSize:'1rem',color:'#166534',marginBottom:6}},'✅ '+fr(d.rows)+' ligne'+pl(d.rows,'')+' mise'+pl(d.rows,'')+' à jour'),
+        h('div',{style:{fontSize:'.76rem',color:'#334155'}},fr(d.cells)+' cellule'+pl(d.cells,'')+' écrite'+pl(d.cells,'')+(d.skipped?' · '+d.skipped+' non touchée'+pl(d.skipped,'')+' car modifiée'+pl(d.skipped,'')+' entre-temps':'')+'.'),
+        d.logErr?h('div',{style:{fontSize:'.74rem',color:'#b91c1c',marginTop:6}},'⚠️ Le journal n\'a pas pu être écrit ('+d.logErr+') : l\'annulation ne sera pas possible.'):h('div',{style:{fontSize:'.72rem',color:'#64748b',marginTop:6}},'Détail et annulation possible : onglet « '+LOG_SHEET+' ».')),
+      h('div',{style:box},
+        h('div',{style:{display:'flex',flexDirection:'column',gap:6}},
+          d.updated.length?h('button',{style:{...BTN_B,...big},disabled:!!busy,onClick:async()=>{try{const n=await showOnlyRows(d.sheet,d.firstRow,d.updated);onToast(n+' ligne'+pl(n,'')+' affichée'+pl(n,'')+' (les autres sont masquées).');}catch(e){setErr(msg(e));}}},'👁 Voir les lignes mises à jour'):null,
+          d.notFound.length?h('button',{style:{...BTN_N,...big},disabled:!!busy,onClick:async()=>{try{const n=await showOnlyRows(d.sheet,d.firstRow,d.notFound);onToast(n+' ligne'+pl(n,'')+' non retrouvée'+pl(n,'')+' affichée'+pl(n,'')+'.');}catch(e){setErr(msg(e));}}},'❓ Voir les lignes non retrouvées'):null,
+          h('button',{style:{...BTN_N,...big},disabled:!!busy,onClick:async()=>{try{await showAllRows(d.sheet,d.firstRow);onToast('Toutes les lignes sont de nouveau affichées.');}catch(e){setErr(msg(e));}}},'Tout réafficher'),
+          last&&last.lot?h('button',{style:undoArmed?{...BTN_F,...big}:{...BTN_N,...big},disabled:!!busy,onClick:undo},undoArmed?'⚠️ Confirmer l\'annulation':'↩️ Annuler cette mise à jour'):null,
+          h('button',{style:{...BTN_B,...big},disabled:!!busy,onClick:reset},'Nouvelle mise à jour')),
+        status,errBox));
+  };
+
+  const purge=async()=>{setErr('');setBusy('purge');setProg('Nettoyage du journal…');try{const r=await purgeLog();onToast(r.rows?'Détail supprimé pour '+r.lots+' ancienne'+pl(r.lots,'')+' mise'+pl(r.lots,'')+' à jour ('+fr(r.rows)+' lignes). Les résumés sont conservés.':'Rien à nettoyer.');await refreshLast();}catch(e){setErr(msg(e));}setBusy('');setProg('');};
+  return h('div',null,
+    step!=='done'?stepsBar:null,
+    step==='files'?screenFiles():step==='scope'?screenScope():step==='review'?screenReview():screenDone());
+}
+
+/* ═════════ Bandeau « dernière action » (partagé) ═════════ */
+function LastActionBar(p){
+  const {onToast}=p;
+  const [last,setLast]=useState(null);
+  const [armed,setArmed]=useState(false);
+  const [busy,setBusy]=useState('');
+  const [err,setErr]=useState('');
+  const refresh=async()=>{try{setLast(await readLastBatch());}catch(e){setLast(null);}};
+  useEffect(()=>{refresh();LOGBUS.subs.add(refresh);return ()=>{LOGBUS.subs.delete(refresh);};},[]);
+  if(!last||!last.lot)return null;
+  const undo=async()=>{
+    if(!armed){setArmed(true);return;}
+    setArmed(false);setErr('');setBusy('…');
+    try{
+      const r=await undoBatch(last.lot,(a,b)=>setBusy('Restauration '+fmtN(a)+' / '+fmtN(b)+'…'));
+      onToast&&onToast(r.restored+' cellule'+(r.restored>1?'s':'')+' restaurée'+(r.restored>1?'s':'')+(r.skipped?' · '+r.skipped+' laissée'+(r.skipped>1?'s':'')+' telle'+(r.skipped>1?'s':'')+' quelle'+(r.skipped>1?'s':'')+' (modifiée'+(r.skipped>1?'s':'')+' depuis)':'')+'.');
+    }catch(e){setErr(String(e&&e.message?e.message:e));}
+    setBusy('');
+  };
+  return h('div',{style:{background:'#fffbeb',border:'1px solid #fde68a',borderRadius:8,padding:'5px 9px',marginTop:7,fontSize:'.72rem',color:'#78350f'}},
+    h('div',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',gap:8}},
+      h('span',{style:{minWidth:0}},h('strong',null,'Dernière action : '),last.tool+' · '+last.lot.slice(5,16)+' · '+fmtN(last.rows)+' ligne'+(last.rows>1?'s':'')),
+      h('span',{style:{whiteSpace:'nowrap'}},
+        h('button',{style:armed?{...BTN_F,padding:'2px 8px'}:{...BTN_N,padding:'2px 8px'},disabled:!!busy,onClick:undo},busy||(armed?'⚠️ Confirmer':'↩️ Annuler')),
+        armed?h('button',{style:{...BTN_N,padding:'2px 8px',marginLeft:4},onClick:()=>setArmed(false)},'Non'):null)),
+    err?h('div',{style:{color:'#b91c1c',marginTop:4}},err):null);
+}
+
+/* ═════════ Outils guidés ═════════ */
+async function readScoped(mode){
+  const s=await getSel();
+  return Excel.run(async(ctx)=>{
+    const ws=ctx.workbook.worksheets.getItem(s.sheet);
+    const ur=ws.getUsedRangeOrNullObject(true);ur.load('rowIndex,columnIndex,rowCount,columnCount,isNullObject');await ctx.sync();
+    const out={sheet:s.sheet,cells:[],truncated:false,scanned:0};
+    if(ur.isNullObject)return out;
+    const R1=ur.rowIndex+ur.rowCount-1,C1=ur.columnIndex+ur.columnCount-1;
+    let areas=s.areas;
+    if(mode==='columns'){
+      const cs=new Set();s.areas.forEach(a=>{for(let k=0;k<a.columnCount;k++)cs.add(a.columnIndex+k);});
+      areas=[...cs].filter(c=>c>=ur.columnIndex&&c<=C1).sort((a,b)=>a-b).map(c=>({rowIndex:ur.rowIndex+1,rowCount:Math.max(0,ur.rowCount-1),columnIndex:c,columnCount:1}));
+    }
+    const seen=new Set(),rowsSeen=new Set();
+    for(const a of areas){
+      const r0=Math.max(a.rowIndex,0),r1=Math.min(a.rowIndex+a.rowCount-1,R1),c0=Math.max(a.columnIndex,0),c1=Math.min(a.columnIndex+a.columnCount-1,C1);
+      if(r1<r0||c1<c0)continue;const w=c1-c0+1,step=Math.max(1,Math.floor(20000/w));
+      for(let r=r0;r<=r1;r+=step){
+        const n=Math.min(step,r1-r+1);
+        if(out.scanned+n*w>300000){out.truncated=true;break;}
+        const rg=ws.getRangeByIndexes(r,c0,n,w);rg.load('values,formulasR1C1,numberFormat');await ctx.sync();out.scanned+=n*w;
+        for(let i=0;i<n;i++)for(let j=0;j<w;j++){
+          const v=rg.values[i][j];if(v===''||v===null)continue;
+          const key=(r+i)*16384+(c0+j);if(seen.has(key))continue;seen.add(key);
+          out.cells.push({r:r+i,c:c0+j,v,f:rg.formulasR1C1[i][j],nf:rg.numberFormat[i][j]});
+        }
+      }
+    }
+    if(mode==='visible'&&out.cells.length){
+      let lo=Infinity,hi=-1;out.cells.forEach(x=>{if(x.r<lo)lo=x.r;if(x.r>hi)hi=x.r;});
+      const vr=ws.getRangeByIndexes(lo,ur.columnIndex,hi-lo+1,1).getSpecialCellsOrNullObject(Excel.SpecialCellType.visible);vr.load('isNullObject');await ctx.sync();
+      const vis=new Set();
+      if(!vr.isNullObject){vr.areas.load('items/rowIndex,items/rowCount');await ctx.sync();vr.areas.items.forEach(a=>{for(let k=0;k<a.rowCount;k++)vis.add(a.rowIndex+k);});}
+      out.cells=out.cells.filter(x=>vis.has(x.r));
+    }
+    return out;
+  });
+}
+/* nombres affichés sur les cartes de périmètre (sans lire les valeurs) */
+async function countToolScopes(){
+  const s=await getSel();
+  return Excel.run(async(ctx)=>{
+    const ws=ctx.workbook.worksheets.getItem(s.sheet);
+    const ur=ws.getUsedRangeOrNullObject(true);ur.load('rowIndex,columnIndex,rowCount,columnCount,isNullObject');await ctx.sync();
+    if(ur.isNullObject)return {sheet:s.sheet,selection:0,visible:0,columns:0};
+    const R1=ur.rowIndex+ur.rowCount-1,C1=ur.columnIndex+ur.columnCount-1;
+    let sel=0,vis=0;const cs=new Set();
+    for(const a of s.areas){
+      const r0=Math.max(a.rowIndex,0),r1=Math.min(a.rowIndex+a.rowCount-1,R1),c0=Math.max(a.columnIndex,0),c1=Math.min(a.columnIndex+a.columnCount-1,C1);
+      if(r1<r0||c1<c0)continue;
+      sel+=(r1-r0+1)*(c1-c0+1);for(let c=c0;c<=c1;c++)cs.add(c);
+      const vr=ws.getRangeByIndexes(r0,ur.columnIndex,r1-r0+1,1).getSpecialCellsOrNullObject(Excel.SpecialCellType.visible);vr.load('isNullObject');await ctx.sync();
+      if(vr.isNullObject)continue;
+      vr.areas.load('items/rowCount');await ctx.sync();
+      vis+=vr.areas.items.reduce((t,x)=>t+x.rowCount,0)*(c1-c0+1);
+    }
+    return {sheet:s.sheet,selection:sel,visible:vis,columns:cs.size*Math.max(0,ur.rowCount-1)};
+  });
+}
+
+const TOOLS=[
+  {k:'ids',ic:'🆔',t:'Extraire l\'ID des URL',d:'Transforme des liens de posts en identifiants (Facebook, Instagram, X, YouTube, TikTok…).',verb:'extrait',noun:'ID'},
+  {k:'player',ic:'🔗',t:'Shorts et reels → lien standard',d:'youtube.com/shorts/… et facebook.com/reel/… deviennent des liens de lecteur classiques.',verb:'convertit',noun:'lien'},
+  {k:'dates',ic:'📅',t:'Dates : retirer l\'heure',d:'2026-10-19T18:18:30Z devient 2026-10-19, sans conversion de fuseau.',verb:'nettoie',noun:'date'},
+  {k:'spaces',ic:'🧹',t:'Supprimer les espaces parasites',d:'Espaces en début et fin de cellule (y compris invisibles).',verb:'nettoie',noun:'cellule'}];
+
+function GuidedTools(p){
+  const {onToast}=p;
+  const [step,setStep]=useState('home');          // home → setup → review → done
+  const [tool,setTool]=useState(null);
+  const [scope,setScope]=useState('selection');
+  const [counts,setCounts]=useState(null);
+  const [cols,setCols]=useState(null);
+  const [tcol,setTcol]=useState(null);
+  const [mode,setMode]=useState('fill');
+  const [real,setReal]=useState(true);
+  const [plan,setPlan]=useState(null);
+  const [done,setDone]=useState(null);
+  const [busy,setBusy]=useState('');
+  const [prog,setProg]=useState('');
+  const [err,setErr]=useState('');
+  const live=useRef({});live.current={step};
+  const msg=(e)=>String(e&&e.message?e.message:e);
+  const pl=(n,a,b)=>n>1?(b||a+'s'):a;
+  const T=tool?TOOLS.find(x=>x.k===tool):null;
+
+  const recount=async()=>{try{const c=await countToolScopes();setCounts(c);}catch(e){}};
+  const loadCols=async()=>{
+    try{const r=await sheetCols();setCols(r);
+      setTcol((cur)=>{if(cur!==null&&r.cols.some(x=>x.c===cur))return cur;const g=r.cols.find(x=>['post_id','id post','id_post','id','ids'].indexOf(x.name.toLowerCase())>=0);return g?g.c:null;});
+    }catch(e){setErr(msg(e));}
+  };
+  useEffect(()=>{
+    if(step!=='setup')return;
+    let timer=null;const fn=()=>{clearTimeout(timer);timer=setTimeout(()=>{if(live.current.step==='setup')recount();},500);};
+    try{Office.context.document.addHandlerAsync(Office.EventType.DocumentSelectionChanged,fn);}catch(e){}
+    return ()=>{clearTimeout(timer);try{Office.context.document.removeHandlerAsync(Office.EventType.DocumentSelectionChanged,{handler:fn});}catch(e){}};
+  },[step]);
+
+  const choose=async(k)=>{setTool(k);setErr('');setPlan(null);setStep('setup');setBusy('x');await recount();if(k==='ids')await loadCols();setBusy('');};
+  const analyse=async()=>{
+    setErr('');setBusy('plan');setProg('Lecture des cellules…');
+    try{
+      const sel=await readScoped(scope);
+      if(!sel.cells.length)throw new Error(scope==='selection'?'Sélectionnez d\'abord des cellules (non vides) dans Excel.':'Aucune cellule non vide dans ce périmètre.');
+      setProg('Analyse…');await new Promise(r=>setTimeout(r,20));
+      const r=tool==='ids'?await planIds(sel,{mode,tcol,colsSheet:cols&&cols.sheet}):tool==='player'?await planPlayer(sel):tool==='dates'?await planDates(sel,{real}):await planSpaces(sel);
+      r.scanned=sel.cells.length;setPlan(r);setStep('review');
+    }catch(e){setErr(msg(e));}
+    setBusy('');setProg('');
+  };
+  const write=async()=>{
+    setErr('');setBusy('write');
+    try{
+      const collect=[];
+      const r=await withManualCalc(()=>writeChanges(plan.sheet,plan.changes,(a,b)=>setProg('Écriture '+fmtN(a)+' / '+fmtN(b)+'…'),collect));
+      setProg('Journal…');const lot=nowStr();let logErr='';
+      const scopeLbl=scope==='selection'?'sélection':scope==='visible'?'sélection (lignes visibles)':'colonnes entières';
+      try{await appendLog(plan.sheet,lot,collect,{},{tool:T.t,summary:'Périmètre : '+scopeLbl+' · '+r.n+' cellule'+pl(r.n,'')+' modifiée'+pl(r.n,'')+(r.skipped?' · '+r.skipped+' non touchée'+pl(r.skipped,''):'')+(plan.bad&&plan.bad.length?' · '+plan.bad.length+' sans ID':'')});}catch(e){logErr=msg(e);}
+      setDone({n:r.n,skipped:r.skipped,logErr});setStep('done');
+    }catch(e){setErr(msg(e));}
+    setBusy('');setProg('');
+  };
+
+  const box={background:'#fff',border:'1px solid #e2e8f0',borderRadius:10,padding:'.7rem .8rem',marginBottom:10};
+  const big={padding:'9px 14px',fontSize:'.84rem'};
+  const td={padding:'3px 5px',borderBottom:'1px solid #f1f5f9',verticalAlign:'top',fontSize:'.72rem'};
+  const rowS={display:'flex',alignItems:'center',gap:6,flexWrap:'wrap',marginBottom:6,fontSize:'.75rem'};
+  const spin=busy?h('span',{style:{display:'inline-block',width:12,height:12,border:'2px solid #cbd5e1',borderTopColor:'#2563eb',borderRadius:'50%',animation:'spin .8s linear infinite',marginRight:6,verticalAlign:'-2px'}}):null;
+  const status=busy&&busy!=='x'?h('div',{style:{fontSize:'.76rem',color:'#475569',marginTop:8}},spin,prog||'En cours…'):null;
+  const errBox=err?h('div',{style:{background:'#fef2f2',border:'1px solid #fecaca',color:'#b91c1c',borderRadius:6,padding:'6px 9px',fontSize:'.76rem',marginTop:8}},err):null;
+  const selCard=(on)=>({border:'2px solid '+(on?'#2563eb':'#e2e8f0'),background:on?'#eff6ff':'#fff',borderRadius:8,padding:'8px 10px',marginBottom:6,cursor:'pointer'});
+
+  const screenHome=()=>h('div',null,
+    h('div',{style:{fontWeight:800,fontSize:'.9rem',marginBottom:6}},'Que voulez-vous nettoyer ?'),
+    h('div',{style:{fontSize:'.74rem',color:'#64748b',marginBottom:8}},'Ces outils marchent dans n\'importe quel classeur, pas seulement un pivot. Rien n\'est écrit avant votre accord, et tout peut être annulé.'),
+    TOOLS.map(t=>h('div',{key:t.k,onClick:()=>choose(t.k),style:{...box,cursor:'pointer',marginBottom:8}},
+      h('div',{style:{fontWeight:800,fontSize:'.84rem'}},t.ic+' '+t.t),
+      h('div',{style:{fontSize:'.73rem',color:'#475569',marginTop:3,lineHeight:1.5}},t.d))),
+    h(LastActionBar,{onToast}));
+
+  const screenSetup=()=>{
+    const c=counts;
+    const cards=[
+      ['selection','Ma sélection','Les cellules sélectionnées maintenant dans Excel.',c?c.selection:0],
+      ['visible','Ma sélection, lignes visibles seulement','Ignore les lignes masquées par vos filtres.',c?c.visible:0],
+      ['columns','Les colonnes de ma sélection, en entier','Toutes les lignes de ces colonnes (sauf la 1re ligne, supposée être l\'en-tête).',c?c.columns:0]];
+    const opts=cols?cols.cols.map(x=>({value:String(x.c),label:x.letter+(x.name?' · '+x.name:'')})):[];
+    const idsReady=tool!=='ids'||mode==='inplace'||tcol!==null;
+    return h('div',null,
+      h('div',{style:box},
+        h('div',{style:{fontWeight:800,fontSize:'.9rem',marginBottom:4}},T.ic+' '+T.t),
+        h('div',{style:{fontSize:'.74rem',color:'#475569',marginBottom:8,lineHeight:1.5}},T.d),
+        h('div',{style:{fontWeight:700,fontSize:'.8rem',marginBottom:6}},'Quelles cellules traiter ?'),
+        cards.map(([k,t,d,n])=>h('div',{key:k,onClick:()=>setScope(k),style:selCard(scope===k)},
+          h('div',{style:{display:'flex',justifyContent:'space-between',fontWeight:700,fontSize:'.8rem'}},h('span',null,(scope===k?'◉ ':'○ ')+t),h('span',null,c?fmtN(n)+' cellule'+pl(n,''):'…')),
+          h('div',{style:{fontSize:'.71rem',color:'#64748b',marginTop:2}},d))),
+        h('div',{style:{textAlign:'right'}},h('span',{className:'rl',style:{fontSize:'.72rem'},onClick:recount},'↻ Actualiser les nombres'))),
+      tool==='ids'?h('div',{style:box},
+        h('div',{style:{fontWeight:700,fontSize:'.8rem',marginBottom:6}},'Où écrire les ID ?'),
+        h('div',{style:rowS},modeBtn2(mode,setMode,'fill','Dans une autre colonne'),modeBtn2(mode,setMode,'inplace','À la place des URL')),
+        mode==='fill'?h('div',{style:rowS},h('span',{style:{color:'#64748b'}},'Colonne à remplir'),
+          h(Picker,{value:tcol===null?'':String(tcol),onChange:(v)=>setTcol(v===''?null:+v),options:[{value:'',label:'— choisir —'}].concat(opts)}),
+          h('span',{className:'rl',onClick:loadCols},'↻'),cols?h('span',{style:{color:'#94a3b8'}},'feuille « '+cols.sheet+' »'):null):null,
+        h('div',{style:{fontSize:'.7rem',color:'#64748b'}},mode==='fill'?'Les cellules déjà remplies de cette colonne ne sont jamais modifiées.':'L\'URL est remplacée par l\'ID dans la cellule (utile pour une colonne dédiée).')):null,
+      tool==='dates'?h('div',{style:box},
+        h('div',{style:{fontWeight:700,fontSize:'.8rem',marginBottom:6}},'Format du résultat'),
+        h('div',{style:rowS},modeBtn2(real,setReal,true,'Vraie date Excel (affichée aaaa-mm-jj)'),modeBtn2(real,setReal,false,'Texte aaaa-mm-jj'))):null,
+      errBox,status,
+      h('div',{style:{display:'flex',gap:6}},
+        h('button',{style:{...BTN_N,...big},disabled:!!busy&&busy!=='x',onClick:()=>{setErr('');setStep('home');}},'← Retour'),
+        h('button',{style:{...BTN_B,...big,flex:1},disabled:!!busy||!idsReady||(c&&!c[scope]&&scope!=='columns'&&false),onClick:analyse},'Voir ce qui va changer →')));
+  };
+
+  const screenReview=()=>{
+    if(!plan)return null;
+    const n=plan.changes.length,ign=Object.keys(plan.ign).filter(k=>plan.ign[k]);
+    return h('div',null,
+      h('div',{style:box},
+        h('div',{style:{fontWeight:800,fontSize:'1rem',marginBottom:8,color:n?'#166534':'#475569'}},n?fmtN(n)+' cellule'+pl(n,'')+(n>1?' vont':' va')+' être modifiée'+pl(n,''):'Rien à modifier'),
+        n?h('div',{style:{fontSize:'.76rem',color:'#475569',marginBottom:4}},T.ic+' '+T.t+' · '+fmtN(plan.scanned||0)+' cellule'+pl(plan.scanned||0,'')+' lue'+pl(plan.scanned||0,'')):null,
+        ign.length?h('div',{style:{fontSize:'.74rem',color:'#64748b'}},'Ignorées : '+ign.map(k=>plan.ign[k]+' '+k).join(' · ')):null,
+        plan.byPl&&Object.keys(plan.byPl).length?h('div',{style:{fontSize:'.72rem',color:'#475569',marginTop:4}},Object.keys(plan.byPl).map(k=>k+' : '+plan.byPl[k]+(ID_RULES[k]?' ('+ID_RULES[k].note+')':'')).join(' — ')):null,
+        plan.truncated?h('div',{style:{fontSize:'.72rem',color:'#b45309',marginTop:4}},'⚠️ Zone très grande : seules les 300 000 premières cellules ont été analysées.'):null),
+      n?h('div',{style:{...box,padding:'.5rem .8rem'}},
+        h('div',{style:{fontWeight:700,fontSize:'.78rem',marginBottom:4}},'Aperçu'),
+        h('div',{style:{overflowX:'auto'}},h('table',{style:{width:'100%',borderCollapse:'collapse'}},h('tbody',null,
+          plan.changes.slice(0,6).map((x,i)=>h('tr',{key:i},
+            h('td',{style:{...td,color:'#94a3b8'}},cellRef(x.r,x.c)),
+            h('td',{style:{...td,color:'#64748b',maxWidth:130,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'},title:String(x.before)},shortTxt(x.before,40)),
+            h('td',{style:td},'→'),
+            h('td',{style:{...td,fontWeight:700}},shortTxt(x.label||x.v,40)))))),
+          n>6?h('div',{style:{fontSize:'.7rem',color:'#94a3b8'}},'… et '+fmtN(n-6)+' autres'):null)):null,
+      plan.bad&&plan.bad.length?h('div',{style:{fontSize:'.74rem',color:'#92400e',background:'#fffbeb',border:'1px solid #fde68a',borderRadius:6,padding:'5px 8px',marginBottom:10}},
+        plan.bad.length+' lien'+pl(plan.bad.length,'')+' sans ID (plateforme ou format non reconnu), à regarder à la main : lignes '+plan.bad.slice(0,10).map(x=>x.r+1).join(', ')+(plan.bad.length>10?' …':'')):null,
+      errBox,status,
+      h('div',{style:{display:'flex',gap:6}},
+        h('button',{style:{...BTN_N,...big},disabled:!!busy,onClick:()=>{setErr('');setStep('setup');}},'← Retour'),
+        n?h('button',{style:{...BTN_B,...big,flex:1},disabled:!!busy,onClick:write},busy==='write'?'Modification…':'Modifier '+fmtN(n)+' cellule'+pl(n,'')):null),
+      !busy&&n?h('div',{style:{fontSize:'.7rem',color:'#64748b',marginTop:8,lineHeight:1.5}},'Les anciennes valeurs sont consignées dans l\'onglet « '+LOG_SHEET+' » : vous pourrez annuler. Le format des cellules (texte, date) reste celui appliqué.'):null);
+  };
+
+  const screenDone=()=>done?h('div',null,
+    h('div',{style:{...box,background:'#f0fdf4',borderColor:'#bbf7d0'}},
+      h('div',{style:{fontWeight:800,fontSize:'1rem',color:'#166534',marginBottom:6}},'✅ '+fmtN(done.n)+' cellule'+pl(done.n,'')+' modifiée'+pl(done.n,'')),
+      done.skipped?h('div',{style:{fontSize:'.76rem',color:'#334155'}},done.skipped+' non touchée'+pl(done.skipped,'')+' car modifiée'+pl(done.skipped,'')+' entre-temps.'):null,
+      done.logErr?h('div',{style:{fontSize:'.74rem',color:'#b91c1c',marginTop:6}},'⚠️ Le journal n\'a pas pu être écrit ('+done.logErr+') : l\'annulation ne sera pas possible.'):h('div',{style:{fontSize:'.72rem',color:'#64748b',marginTop:6}},'Détail dans l\'onglet « '+LOG_SHEET+' ».')),
+    h(LastActionBar,{onToast}),
+    h('div',{style:{display:'flex',gap:6,marginTop:10}},
+      h('button',{style:{...BTN_N,...big,flex:1},onClick:()=>{setDone(null);setPlan(null);setStep('setup');}},'Refaire avec cet outil'),
+      h('button',{style:{...BTN_B,...big,flex:1},onClick:()=>{setDone(null);setPlan(null);setTool(null);setStep('home');}},'Autre outil'))):null;
+
+  return h('div',null,step==='home'?screenHome():step==='setup'?screenSetup():step==='review'?screenReview():screenDone());
 }
 
 /* ═════════ Interface ═════════ */
@@ -2422,6 +3110,7 @@ function PivotVerifier(){
   const [refreshing,setRefreshing]=useState(false);
   const [tab,setTab]=useState('verif');
   const prev=useRef(null);
+  const [gi,setGi]=useState(-1);
 
   const runningRef=useRef(false),pendingRef=useRef(false),autoRef=useRef(true),runRef=useRef(null),timerRef=useRef(null),quietRef=useRef(0),durRef=useRef(0),tabInit=useRef(false),evRef=useRef(null);
   const run=async(msg,silent)=>{
@@ -2530,6 +3219,23 @@ function PivotVerifier(){
     if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(txt).then(()=>setToast('Rapport copié dans le presse-papiers.'),fallback);else fallback();
   };
 
+
+  const queue=[...bl,...vf];
+  const goIssue=async(i)=>{
+    if(!queue.length)return;const k=((i%queue.length)+queue.length)%queue.length;setGi(k);const r=queue[k];
+    setOpenCards(new Set([r.id]));setOpenG(pg=>{const n=new Set(pg);n.add(r.lv==='b'?'b':'v');return n;});
+    if(r.rows&&r.rows.length&&r.sec){try{await onSelect(r);}catch(e){}}
+  };
+  const cur=gi>=0&&gi<queue.length?queue[gi]:null;
+  const guide=(results.length&&queue.length)?h('div',{style:{background:bl.length?'#fef2f2':'#fffbeb',border:'1px solid '+(bl.length?'#fecaca':'#fde68a'),borderRadius:10,padding:'.65rem .8rem',marginBottom:10}},
+    h('div',{style:{fontWeight:800,fontSize:'.9rem',color:bl.length?'#b91c1c':'#92400e',marginBottom:4}},
+      bl.length?bl.length+' point'+(bl.length>1?'s bloquants':' bloquant')+' à corriger avant d\'envoyer le fichier':vf.length+' point'+(vf.length>1?'s':'')+' à vérifier'),
+    (bl.length&&vf.length)?h('div',{style:{fontSize:'.74rem',color:'#78350f',marginBottom:6}},'Puis '+vf.length+' point'+(vf.length>1?'s':'')+' à vérifier.'):null,
+    cur?h('div',{style:{fontSize:'.76rem',color:'#334155',marginBottom:6}},h('strong',null,'Point '+(gi+1)+' / '+queue.length+' : '),cur.lb):null,
+    h('div',{style:{display:'flex',gap:6,flexWrap:'wrap'}},
+      cur?h('button',{style:BTN_N,onClick:()=>goIssue(gi-1)},'← Précédent'):null,
+      h('button',{style:BTN_B,onClick:()=>goIssue(cur?gi+1:0)},cur?'Suivant →':'👉 Voir le premier point'),
+      (cur&&cur.lv==='v')?h('button',{style:BTN_N,onClick:()=>{onSeen(cur.id,true);goIssue(gi);}},'✓ Vu, c\'est normal'):null)):null;
   const cardFor=(r,lv)=>h(Card,{key:r.id,r,lv,open:openCards.has(r.id),onToggle:()=>flip(setOpenCards,r.id),seen:acked.has(r.id),isNew:newIds.has(r.id),onSelect,onFilter,onFix:(id)=>setConfirmFix(id),onSeen});
   const chip=(txt,bg,col)=>h('span',{style:{background:bg,color:col,borderRadius:12,padding:'2px 9px',fontSize:'.74rem',fontWeight:800,whiteSpace:'nowrap'}},txt);
   const overlay=(children,onBg)=>h('div',{style:{position:'fixed',inset:0,background:'rgba(15,23,42,.5)',zIndex:2000,display:'flex',alignItems:'center',justifyContent:'center',padding:14},onClick:onBg},children);
@@ -2561,10 +3267,11 @@ function PivotVerifier(){
           h('button',{style:BTN_N,title:'Copier le rapport',onClick:copyReport,disabled:!results.length},'📋'),
           h('button',{style:BTN_N,onClick:()=>setShowHelp(true)},'❓'))),
       h('div',{style:{display:'flex',gap:6,marginTop:7}},
+        h('button',{onClick:()=>setTab('maj'),style:{...btn(tab==='maj'?'#1e293b':'#fff',tab==='maj'?'#fff':'#334155','#1e293b'),flex:1}},'🔄 Mise à jour'),
         h('button',{onClick:()=>setTab('verif'),style:{...btn(tab==='verif'?'#1e293b':'#fff',tab==='verif'?'#fff':'#334155','#1e293b'),flex:1}},'🔍 Vérifications'),
         h('button',{onClick:()=>setTab('analyse'),style:{...btn(tab==='analyse'?'#1e293b':'#fff',tab==='analyse'?'#fff':'#334155','#1e293b'),flex:1}},'📈 Analyse'),
-        h('button',{onClick:()=>setTab('outils'),style:{...btn(tab==='outils'?'#1e293b':'#fff',tab==='outils'?'#fff':'#334155','#1e293b'),flex:1}},'🛠 Outils'),
-        h('button',{onClick:()=>setTab('maj'),style:{...btn(tab==='maj'?'#1e293b':'#fff',tab==='maj'?'#fff':'#334155','#1e293b'),flex:1,fontSize:'.7rem',padding:'4px 5px'}},'🔄 Mise à jour')),
+        h('button',{onClick:()=>setTab('outils'),style:{...btn(tab==='outils'?'#1e293b':'#fff',tab==='outils'?'#fff':'#334155','#1e293b'),flex:1}},'🛠 Outils')),
+      (tab==='verif'||tab==='analyse')?h(LastActionBar,{onToast:setToast}):null,
       (results.length&&tab==='verif')?h('div',{style:{display:'flex',flexWrap:'wrap',gap:5,marginTop:7,alignItems:'center'}},
         chip('🔴 '+bl.length+' bloquant'+(bl.length>1?'s':''),bl.length?'#fee2e2':'#e2e8f0',bl.length?'#b91c1c':'#64748b'),
         chip('🟠 '+vf.length+' à vérifier',vf.length?'#fef3c7':'#e2e8f0',vf.length?'#b45309':'#64748b'),
@@ -2585,6 +3292,7 @@ function PivotVerifier(){
     filtered?h('div',{style:{background:'#fff7ed',border:'1px solid #fdba74',color:'#9a3412',borderRadius:8,padding:'6px 10px',fontSize:'.78rem',marginBottom:10,display:'flex',alignItems:'center',justifyContent:'space-between',gap:8}},
       h('span',null,'🔎 Filtre actif sur '+filtered.sec+' : '+filtered.n+' ligne'+(filtered.n>1?'s':'')+' affichée'+(filtered.n>1?'s':'')),
       h('button',{style:BTN_F,onClick:clearFilter},'Tout réafficher')):null,
+    guide,
     (results.length&&(rowsB.length||rowsAll.length))?h('div',{style:{display:'flex',flexWrap:'wrap',alignItems:'center',gap:6,marginBottom:10,fontSize:'.76rem',color:'#475569'}},
       h('span',null,'Afficher dans DATA seulement :'),
       rowsB.length?h('button',{style:BTN_N,onClick:()=>doFilter('DATA',rowsB,'Filtre bloquants')},'🔴 lignes bloquantes ('+rowsB.length+')'):null,
@@ -2602,7 +3310,7 @@ function PivotVerifier(){
       h(Group,{title:'ℹ️ Informations',accent:'#0369a1',count:infos.length,open:openG.has('i'),onToggle:()=>flip(setOpenG,'i')},infos.map(r=>cardFor(r,'i'))),
       h(Group,{title:'✅ Contrôles OK',accent:'#15803d',count:oks.length,open:openG.has('ok'),onToggle:()=>flip(setOpenG,'ok')},oks.map(r=>cardFor(r,'ok'))))),
     h('div',{style:{display:tab==='analyse'?'block':'none'},onClick:onClickReport},h(AnalyseMemo,{tops,brand:recapBrand,onBrand:setRecapBrand,onToast:setToast})),
-    h('div',{style:{display:tab==='outils'?'block':'none'},onClick:onClickReport},h(OutilsTab,{onToast:setToast,onWritten:()=>{if(!(window.__realNames&&window.__realNames.DATA))return;quietRef.current=Date.now()+4000;setTimeout(()=>runRef.current&&runRef.current(undefined,true),600);}})),
+    h('div',{style:{display:tab==='outils'?'block':'none'},onClick:onClickReport},h(GuidedTools,{onToast:setToast,onWritten:()=>{if(!(window.__realNames&&window.__realNames.DATA))return;quietRef.current=Date.now()+4000;setTimeout(()=>runRef.current&&runRef.current(undefined,true),600);}})),
     h('div',{style:{display:tab==='maj'?'block':'none'},onClick:onClickReport},h(UpdateTab,{onToast:setToast,onWritten:()=>{if(!(window.__realNames&&window.__realNames.DATA))return;quietRef.current=Date.now()+4000;setTimeout(()=>runRef.current&&runRef.current(undefined,true),600);}})));
 }
 
