@@ -7,6 +7,7 @@
   <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
   <script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js" crossorigin></script>
   <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <style>*{box-sizing:border-box}body{margin:0;background:#f0f4f8}@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
   .rl{color:#2563eb;cursor:pointer;text-decoration:underline}table{max-width:100%}button:disabled{opacity:.5;cursor:not-allowed}</style>
 </head>
@@ -1241,7 +1242,7 @@ async function readTarget(sheet,col,rows){
 const isEmptyV=(v)=>v===''||v===null||v===undefined;
 const isF=(f)=>typeof f==='string'&&f.charAt(0)==='=';
 /* écriture sécurisée : on relit chaque cellule juste avant d'écrire et on ne touche pas à ce qui a changé */
-async function writeChanges(sheet,changes){
+async function writeChanges(sheet,changes,onProg){
   return Excel.run(async(ctx)=>{
     const ws=ctx.workbook.worksheets.getItem(sheet);let n=0,skipped=0;
     for(let i=0;i<changes.length;i+=500){
@@ -1250,12 +1251,13 @@ async function writeChanges(sheet,changes){
       await ctx.sync();
       part.forEach((ch,k)=>{
         const cur=cells[k].values[0][0],f=cells[k].formulasR1C1[0][0];
-        const ok=!isF(f)&&(ch.expect==='empty'?isEmptyV(cur):cur===ch.before);
+        const ok=!isF(f)&&(ch.expect==='empty'?isEmptyV(cur):ch.expect==='any'?true:cur===ch.before);
         if(!ok){skipped++;return;}
         if(ch.fmt)cells[k].numberFormat=[[ch.fmt]];
-        cells[k].values=[[ch.v]];n++;
+        if(ch.formula)cells[k].formulas=[[ch.formula]];else cells[k].values=[[ch.v]];n++;
       });
       await ctx.sync();
+      if(onProg)onProg(Math.min(i+500,changes.length),changes.length);
     }
     return {n,skipped};
   });
@@ -1429,6 +1431,794 @@ function OutilsTab(p){
       plan:(sel)=>planSpaces(sel)}));
 }
 const modeBtn2=(cur,set,val,l)=>h('button',{onClick:()=>set(val),style:{padding:'3px 9px',fontSize:'.74rem',fontWeight:700,cursor:'pointer',border:'1px solid '+(cur===val?'#2563eb':'#cbd5e1'),background:cur===val?'#2563eb':'#fff',color:cur===val?'#fff':'#334155',borderRadius:6}},l);
+
+const ApifyN=(function(){
+// Normaliseur d'exports Apify -> structure commune.
+// Entrée : tableau de lignes (JSON imbriqué OU lignes déjà aplaties de CSV/XLSX, clés "a/b/0").
+// Sortie : { platform, records[], skipped[], stats }
+// Aucune dépendance : fonctionne dans le volet Excel (navigateur) et sous Node.
+
+'use strict';
+
+// ---------- Aplatissement : JSON imbriqué et colonnes CSV/XLSX -> mêmes chemins "a.b.0" ----------
+function flatten(obj, prefix = '', out = {}) {
+  if (obj === null || obj === undefined) { if (prefix) out[prefix] = null; return out; }
+  if (Array.isArray(obj)) {
+    obj.forEach((v, i) => flatten(v, prefix ? `${prefix}.${i}` : String(i), out));
+    return out;
+  }
+  if (typeof obj === 'object') {
+    for (const [k, v] of Object.entries(obj)) flatten(v, prefix ? `${prefix}.${k}` : k, out);
+    return out;
+  }
+  out[prefix] = obj;
+  return out;
+}
+
+function normalizeRow(row) {
+  // Les colonnes CSV/XLSX d'Apify utilisent "/" comme séparateur : on les ramène à ".".
+  const needsFlatten = Object.values(row).some(v => v !== null && typeof v === 'object');
+  const flat = needsFlatten ? flatten(row) : { ...row };
+  const out = {};
+  for (const [k, v] of Object.entries(flat)) out[k.replace(/\//g, '.')] = v;
+  return out;
+}
+
+// ---------- Utilitaires ----------
+function pick(r, paths) {
+  for (const p of paths) {
+    const v = r[p];
+    if (v !== undefined && v !== null && v !== '') return v;
+  }
+  return null;
+}
+
+// Nombre robuste : 1234, "1234", "1 234", "1,2K", "3.4M", "1 234,5"
+function toNum(v) {
+  if (v === null || v === undefined || v === '') return null;
+  if (typeof v === 'number') return Number.isFinite(v) ? v : null;
+  let s = String(v).trim().replace(/ |\s/g, '').toLowerCase();
+  if (s === '' || s === 'none' || s === 'null' || s === 'nan') return null;
+  const m = s.match(/^(-?[\d.,]+)([kmb])?$/);
+  if (!m) return null;
+  let n = m[1];
+  if (n.includes(',') && n.includes('.')) n = n.replace(/,/g, '');
+  else n = n.replace(',', '.');
+  let x = parseFloat(n);
+  if (!Number.isFinite(x)) return null;
+  const mult = { k: 1e3, m: 1e6, b: 1e9 }[m[2]] || 1;
+  return Math.round(x * mult);
+}
+
+// Les identifiants restent du texte (jamais de Number : 19 chiffres dépassent la précision JS).
+function toId(v) {
+  if (v === null || v === undefined || v === '') return null;
+  if (typeof v === 'number') return String(v); // déjà perdu si > 2^53 : à éviter en amont
+  const s = String(v).trim();
+  return /^none|null|nan$/i.test(s) ? null : s;
+}
+
+function toDate(v) {
+  if (v === null || v === undefined || v === '') return null;
+  if (typeof v === 'number' || /^\d{9,10}$/.test(String(v))) return new Date(Number(v) * 1000).toISOString();
+  const d = new Date(String(v));
+  return isNaN(d) ? null : d.toISOString();
+}
+
+const metrics = (o) => ({ likes: null, comments: null, shares: null, retweets: null, quotes: null, saves: null, views: null, ...o });
+
+
+// ---------- Règles d'ID / plateforme de l'extension (reprises à l'identique) ----------
+const hostOf = (s) => { const m = /^(?:[a-z][a-z0-9+.-]*:\/\/)?([^\/?#\s]+)/i.exec(String(s).trim()); return m ? m[1].toLowerCase().replace(/^(www|m|mobile|web|mbasic)\./, '') : ''; };
+const platOfUrl = (s) => {
+  const h0 = hostOf(s);
+  if (/(^|\.)facebook\.com$|(^|\.)fb\.com$|^fb\.watch$/.test(h0)) return 'facebook';
+  if (/(^|\.)instagram\.com$|^instagr\.am$/.test(h0)) return 'instagram';
+  if (/(^|\.)(twitter|x)\.com$/.test(h0)) return 'twitter';
+  if (/(^|\.)youtube\.com$|^youtu\.be$|(^|\.)youtube-nocookie\.com$/.test(h0)) return 'youtube';
+  if (/(^|\.)tiktok\.com$/.test(h0)) return 'tiktok';
+  if (/(^|\.)linkedin\.com$|^lnkd\.in$/.test(h0)) return 'linkedin';
+  if (/(^|\.)strava\.com$|^strava\.app\.link$/.test(h0)) return 'strava';
+  if (/(^|\.)twitch\.tv$/.test(h0)) return 'twitch';
+  return 'inconnue';
+};
+const cut19 = (id) => id.length > 19 ? id.slice(-19) : id;
+const bare = (s) => String(s).trim().split(/[?#]/)[0].replace(/\/+$/, '');
+const ID_RULES = {
+  facebook: (s) => {
+    let m = s.match(/facebook\.com\/\d+_(\d+)/i); if (m) return m[1];
+    m = s.match(/\/posts\/(pfbid[A-Za-z0-9]+|\d+)/i); if (m) return m[1];
+    m = s.match(/[?&](?:story_fbid|fbid)=(\d+)/i); if (m) return m[1];
+    m = s.match(/\/(?:videos|reel|reels)\/(\d+)/i); if (m) return m[1];
+    m = s.match(/[?&]v=(\d+)/i); if (m) return m[1];
+    m = s.match(/\/permalink\/(\d+)/i); if (m) return m[1];
+    m = s.match(/\/photos\/[^\/?#]+\/(\d+)/i); if (m) return m[1];
+    return null;
+  },
+  instagram: (s) => { const m = s.match(/instagram\.com\/(?:[^\/?#]+\/)?(?:p|reel|reels|tv)\/([A-Za-z0-9_-]+)/i); return m ? m[1] : null; },
+  twitter: (s) => {
+    let m = s.match(/\/status(?:es)?\/(\d+)/i); if (m) return cut19(m[1]);
+    const t = bare(s).replace(/\//g, ''); const l = t.slice(-19); return /^\d{19}$/.test(l) ? l : null;
+  },
+  youtube: (s) => {
+    let m = s.match(/[?&]v=([A-Za-z0-9_-]{6,})/i); if (m) return m[1];
+    m = s.match(/youtu\.be\/([A-Za-z0-9_-]{6,})/i); if (m) return m[1];
+    m = s.match(/\/(?:shorts|live|embed|v)\/([A-Za-z0-9_-]{6,})/i); return m ? m[1] : null;
+  },
+  tiktok: (s) => {
+    let m = s.match(/\/(?:video|photo|image)s?\/(\d+)/i); if (m) return cut19(m[1]);
+    const t = bare(s).replace(/\//g, ''); const l = t.slice(-19); return /^\d{19}$/.test(l) ? l : null;
+  },
+  twitch: (s) => { let m = s.match(/twitch\.tv\/videos\/(\d+)/i); if (m) return m[1]; m = s.match(/(?:clips\.twitch\.tv|twitch\.tv\/[^\/?#]+\/clip)\/([A-Za-z0-9_-]+)/i); return m ? m[1] : null; },
+  linkedin: (s) => s.trim(),
+  strava: (s) => s.trim(),
+  inconnue: () => null,
+};
+const defaultExtractId = (url) => {
+  if (!url) return null;
+  const pl = platOfUrl(url); const s = String(url).trim();
+  try { return ID_RULES[pl](s) || null; } catch (e) { return null; }
+};
+let extractId = defaultExtractId;                       // remplaçable : l'extension injecte sa propre fonction (source unique)
+const setExtractId = (f) => { extractId = f || defaultExtractId; };
+// Plateforme du pivot (colonne Plateforme) pour une plateforme de l'export
+const PIVOT_PLATFORM = { instagram: 'instagram', tiktok: 'tiktok', youtube: 'youtube', x: 'twitter', facebook: 'facebook' };
+
+// ---------- Profils par plateforme ----------
+const PROFILES = {
+  instagram: {
+    // Fichier brut : mots-clés dans le nom OU signature de colonnes
+    nameHint: /instagram/i,
+    signature: ['shortCode', 'ownerUsername', 'likesCount'],
+    accept: r => !!(pick(r, ['shortCode', 'id']) && pick(r, ['url', 'inputUrl'])),
+    map: r => {
+      const code = toId(r['shortCode']);
+      const url = pick(r, ['url', 'inputUrl']);
+      return {
+        platform: 'instagram',
+        subtype: String(r['productType'] || r['type'] || '').toLowerCase() || null,
+        ids: [code, toId(r['id'])].filter(Boolean),
+        url,
+        date: toDate(r['timestamp']),
+        author: r['ownerUsername'] || null,
+        text: r['caption'] || null,
+        metrics: metrics({
+          likes: toNum(r['likesCount']),
+          comments: toNum(r['commentsCount']),
+          // videoViewCount est souvent vide ; videoPlayCount = lectures (vues Reels)
+          views: toNum(pick(r, ['videoPlayCount', 'videoViewCount'])),
+        }),
+      };
+    },
+  },
+
+  tiktok: {
+    nameHint: /tiktok/i,
+    signature: ['webVideoUrl', 'authorMeta.name', 'diggCount'],
+    accept: r => !!(toId(r['id']) && r['webVideoUrl']),
+    skipReason: r => r['note'] || 'ligne sans vidéo',
+    map: r => ({
+      platform: 'tiktok',
+      subtype: r['isSlideshow'] === true || String(r['isSlideshow']).toLowerCase() === 'true' ? 'slideshow' : 'video',
+      ids: [toId(r['id'])],
+      url: r['webVideoUrl'],
+      date: toDate(pick(r, ['createTimeISO', 'createTime'])),
+      author: r['authorMeta.name'] || null,
+      text: r['text'] || null,
+      metrics: metrics({
+        likes: toNum(r['diggCount']),
+        comments: toNum(r['commentCount']),
+        shares: toNum(r['shareCount']),
+        saves: toNum(r['collectCount']),
+        views: toNum(r['playCount']),
+      }),
+    }),
+  },
+
+  youtube: {
+    nameHint: /youtube/i,
+    signature: ['channelName', 'viewCount', 'duration'],
+    // Les lignes "chaîne" (aboutChannelInfo, CHANNEL_HAS_NO_LIVE_VIDEOS) n'ont pas d'id vidéo
+    accept: r => !!(toId(r['id']) && /^[\w-]{11}$/.test(toId(r['id']))),
+    skipReason: r => r['note'] || r['error'] || 'ligne chaîne (pas une vidéo)',
+    map: r => {
+      const id = toId(r['id']);
+      return {
+        platform: 'youtube',
+        subtype: String(r['type'] || '').toLowerCase() || null, // video | shorts | stream
+        ids: [id],
+        url: r['url'] || null,
+        // URL de lecteur standard (les shorts sont convertis, comme vos nettoyages habituels)
+        urlStandard: `https://www.youtube.com/watch?v=${id}`,
+        date: toDate(r['date']),
+        author: pick(r, ['channelName', 'aboutChannelInfo.channelName']),
+        text: r['title'] || null,
+        metrics: metrics({
+          likes: toNum(r['likes']),
+          comments: toNum(r['commentsCount']),
+          views: toNum(r['viewCount']),
+        }),
+        flags: ['likes_arrondis'], // YouTube arrondit les likes au-dessus de ~1000 (1100, 16000…)
+      };
+    },
+  },
+
+  x: {
+    nameHint: /(^|[-_])(x|twitter)[-_]|tweet/i,
+    signature: ['tweetUrl', 'retweetCount', 'likeCount'],
+    accept: r => !!(toId(r['id']) && pick(r, ['url', 'tweetUrl', 'twitterUrl'])),
+    map: r => {
+      const isRt = String(r['isRetweet']).toLowerCase() === 'true' || r['type'] === 'retweet';
+      const own = toId(r['id']);
+      const orig = isRt ? toId(r['retweetedTweet.id']) : null;
+      return {
+        platform: 'x',
+        subtype: isRt ? 'retweet' : (String(r['isReply']).toLowerCase() === 'true' ? 'reply' : (r['type'] || 'tweet')),
+        ids: [own, orig].filter(Boolean),
+        url: pick(r, ['url', 'tweetUrl', 'twitterUrl']),
+        date: toDate(r['createdAt']),
+        author: r['authorUsername'] || null,
+        text: r['text'] || null,
+        metrics: metrics({
+          likes: toNum(r['likeCount']),
+          comments: toNum(r['replyCount']),
+          retweets: toNum(r['retweetCount']),
+          quotes: toNum(r['quoteCount']),
+          saves: toNum(r['bookmarkCount']),
+          views: toNum(r['viewCount']),
+        }),
+        // Pour un RT, Apify recopie les métriques du tweet d'origine : à traiter à part.
+        flags: isRt ? ['metriques_du_tweet_original'] : [],
+        originalUrl: isRt ? r['retweetedTweet.url'] || null : null,
+      };
+    },
+  },
+
+  facebook: {
+    nameHint: /facebook/i,
+    signature: ['facebookUrl', 'facebookId', 'pageName'],
+    // Deux familles de lignes dans un même export : posts (postId) et reels (short_form_video_context)
+    accept: r => !!(r['likes'] !== null && r['likes'] !== undefined && (r['postId'] || r['facebookUrl'])),
+    skipReason: r => r['error'] ? `${r['error']} (${r['errorDescription'] || ''})`
+      : (r['short_form_video_context.video.id'] || r['likers.count'] !== undefined) ? 'reel sans compteur de réactions (à recollecter)'
+      : 'ligne technique (photo/media sans compteurs)',
+    map: r => {
+      const isPost = !!r['postId'];
+      const reelId = isPost ? null : toId(r['facebookId']);
+      return {
+        platform: 'facebook',
+        subtype: isPost ? 'post' : 'reel',
+        ids: (isPost ? [toId(r['postId'])] : [reelId, toId(r['post_id'])]).filter(Boolean),
+        url: isPost ? (r['url'] || r['facebookUrl']) : r['facebookUrl'],
+        date: toDate(isPost ? r['time'] : r['creation_time']),
+        author: isPost ? (r['user.name'] || r['pageName']) : (r['short_form_video_context.video_owner.name'] || r['pageName']),
+        text: isPost ? (r['text'] || null) : null,
+        metrics: metrics({
+          likes: toNum(r['likes']),       // = total des réactions
+          comments: toNum(pick(r, ['comments', 'total_comment_count'])),
+          shares: toNum(pick(r, ['shares', 'share_count_reduced'])),
+          views: null,                    // non fourni par ces acteurs
+        }),
+        flags: ['pas_de_vues'],
+      };
+    },
+  },
+};
+
+// ---------- Détection ----------
+function detectPlatform(fileName, rows) {
+  const name = String(fileName || '');
+  for (const [p, prof] of Object.entries(PROFILES)) if (prof.nameHint.test(name)) return { platform: p, by: 'nom_de_fichier' };
+  const cols = new Set();
+  for (const r of rows.slice(0, 50)) Object.keys(r).forEach(k => cols.add(k));
+  let best = null;
+  for (const [p, prof] of Object.entries(PROFILES)) {
+    const hit = prof.signature.filter(s => cols.has(s)).length;
+    if (hit === prof.signature.length) return { platform: p, by: 'colonnes' };
+    if (hit >= 2 && (!best || hit > best.hit)) best = { platform: p, by: 'colonnes_partielles', hit };
+  }
+  return best;
+}
+
+// ---------- API principale ----------
+function normalizeExport(rawRows, fileName, forcedPlatform) {
+  const rows = rawRows.map(normalizeRow);
+  const det = forcedPlatform ? { platform: forcedPlatform, by: 'choix_manuel' } : detectPlatform(fileName, rows);
+  if (!det) return { platform: null, records: [], skipped: [], stats: { error: 'source non reconnue' } };
+  const prof = PROFILES[det.platform];
+  const records = [], skipped = [];
+  rows.forEach((r, i) => {
+    if (!prof.accept(r)) { skipped.push({ row: i, reason: prof.skipReason ? prof.skipReason(r) : 'ligne ignorée' }); return; }
+    const rec = prof.map(r);
+    rec.sourceRow = i;
+    rec.pivotPlatform = PIVOT_PLATFORM[rec.platform];
+    // Ids complémentaires calculés avec les règles du pivot (ex. Facebook : facebookUrl = pageid_postid -> postid)
+    const extra = [rec.url, r['facebookUrl'], r['url'], r['inputUrl']].map(extractId).filter(Boolean);
+    rec.ids = [...new Set([...rec.ids, ...extra])];
+    records.push(rec);
+  });
+  const count = f => records.filter(f).length;
+  const nullPct = m => records.length ? Math.round(100 * count(x => x.metrics[m] === null) / records.length) : 0;
+  const keys = new Map();
+  records.forEach(x => { const k = x.ids[0]; keys.set(k, (keys.get(k) || 0) + 1); });
+  return {
+    platform: det.platform,
+    detectedBy: det.by,
+    records,
+    skipped,
+    stats: {
+      rows: rows.length,
+      kept: records.length,
+      skipped: skipped.length,
+      duplicateKeys: [...keys.values()].filter(n => n > 1).length,
+      noIdRecords: count(x => !x.ids.length),
+      subtypes: records.reduce((a, x) => (a[x.subtype] = (a[x.subtype] || 0) + 1, a), {}),
+      nullPct: Object.fromEntries(['likes', 'comments', 'shares', 'retweets', 'quotes', 'saves', 'views'].map(m => [m, nullPct(m)])),
+    },
+  };
+}
+
+const api = { normalizeExport, detectPlatform, flatten, toNum, toId, PROFILES, platOfUrl, get extractId() { return extractId; }, setExtractId, ID_RULES, PIVOT_PLATFORM };
+
+return api;
+})();
+const PivotUpd=(function(){
+// Moteur de mise à jour du pivot depuis des enregistrements Apify normalisés.
+// Pur calcul (aucun accès Excel) : renvoie un PLAN que le volet affiche puis écrit.
+'use strict';
+
+// Colonnes du pivot (ancien format). Le format vMD aura son propre dictionnaire.
+const PIVOT_COLS_OLD = {
+  name: 'ancien', platform: 'Plateforme', id: 'ID post', url: 'URL', engagement: 'Social Actions', visibility: 'visibilité',
+  metrics: { likes: 'Likes', comments: 'Comments', retweets: 'Retweets', quotes: 'Quotes', shares: 'Shares ', saves: 'Saves', views: 'Vues' },
+  // Sur X, les vues se collent dans imp_tt_ou_connues (la visibilité lit cette colonne en priorité)
+  viewsByPlatform: { twitter: 'imp_tt_ou_connues' },
+};
+const PIVOT_COLS_VMD = {
+  name: 'vMD', platform: 'social_media', id: 'Post_id', url: 'Post_url', engagement: 'Engagements', visibility: 'Visibilité',
+  metrics: { likes: 'Likes', comments: 'Comments', retweets: 'Retweets', quotes: 'Quotes', shares: 'Shares ', saves: 'Saves', views: 'Vues' },
+  viewsByPlatform: { twitter: 'imp_tt_ou_connues' },
+};
+// Détecte le format d'après les en-têtes (insensible à la casse et aux espaces de fin)
+function detectPivotFormat(headers) {
+  const h = new Set(headers.map(x => String(x ?? '').trim().toLowerCase()));
+  if (h.has('post_id') && h.has('social_media')) return PIVOT_COLS_VMD;
+  if (h.has('id post') && h.has('plateforme')) return PIVOT_COLS_OLD;
+  return null;
+}
+// Colonne du pivot à lire/écrire pour (plateforme, métrique)
+const colFor = (P, plat, m) => (m === 'views' && P.viewsByPlatform && P.viewsByPlatform[plat]) || P.metrics[m];
+
+// Métriques écrites par plateforme du pivot (ce que l'acteur fournit ET que le pivot utilise pour cette plateforme)
+const WRITABLE = {
+  instagram: ['likes', 'comments', 'views'],
+  tiktok:    ['likes', 'comments', 'shares', 'saves', 'views'],
+  youtube:   ['likes', 'comments', 'views'],
+  twitter:   ['likes', 'comments', 'retweets', 'quotes', 'saves', 'views'],
+  facebook:  ['likes', 'comments', 'shares'],
+};
+
+const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
+const num = (v) => {
+  if (isNum(v)) return v;
+  if (v === null || v === undefined || v === '') return null;
+  const n = Number(String(v).replace(/\s| /g, '').replace(',', '.'));
+  return Number.isFinite(n) ? n : null;
+};
+
+// Réplique de la formule « Social Actions » du pivot (sert à l'aperçu ; Excel recalcule la vraie colonne)
+function socialActions(m) {
+  const n = (x) => (isNum(x) ? x : 0);
+  let s = n(m.likes) + n(m.comments);
+  if (isNum(m.shares)) s += (m.shares > 0 ? m.shares : n(m.quotes) + n(m.retweets)) + n(m.saves);
+  return s;
+}
+
+// YouTube arrondit les likes à 2 chiffres significatifs au-delà de 1000 : la valeur réelle est dans [v - pas/2, v + pas/2[
+function roundingStep(v) {
+  if (v < 1000) return 0;
+  const digits = String(Math.round(v)).length;
+  return Math.pow(10, digits - 2);
+}
+
+// Décision pour une métrique : ancienne valeur du pivot vs valeur de l'export
+function decide(metric, oldV, newV, rec) {
+  if (newV === null) return { action: 'skip' };
+  if (oldV === null) return { action: 'fill', value: newV };
+  const roundedSource = rec.platform === 'youtube' && metric === 'likes';
+  if (roundedSource) {
+    const step = roundingStep(newV);
+    if (step && Math.abs(oldV - newV) <= step / 2) return { action: 'same', note: 'arrondi' }; // cohérent avec l'arrondi
+  }
+  if (newV > oldV) return { action: 'raise', value: newV };
+  if (newV < oldV) return { action: 'drop', value: oldV, incoming: newV };  // règle du max : on garde l'ancien et on signale
+  return { action: 'same' };
+}
+
+function buildIndex(pivotRows, P) {
+  const byKey = new Map();
+  const dupKeys = new Set();
+  pivotRows.forEach((r, idx) => {
+    const plat = String(r[P.platform] ?? '').trim().toLowerCase();
+    if (!WRITABLE[plat]) return;                       // story, linkedin, websites… hors périmètre Apify
+    const ids = new Set();
+    const id = r[P.id]; if (id !== null && id !== undefined && String(id).trim() !== '') ids.add(String(id).trim());
+    if (!ids.size) { const x = r._extractId && r._extractId(r[P.url]); if (x) ids.add(x); }
+    ids.forEach(i => {
+      const k = plat + '|' + i;
+      if (byKey.has(k)) dupKeys.add(k); else byKey.set(k, []);
+      byKey.get(k).push(idx);
+    });
+  });
+  return { byKey, dupKeys };
+}
+
+/**
+ * @param pivotRows  [{ row: <n° ligne Excel>, 'Plateforme':..., 'ID post':..., 'URL':..., 'Likes':..., ... }]
+ * @param records    sortie de normalizeExport(...).records
+ * @param opts       { cols, extractId, scope?: Set<n° ligne> }  scope = lignes filtrées/sélectionnées
+ */
+function planUpdate(pivotRows, records, opts = {}) {
+  const P = opts.cols || PIVOT_COLS_OLD;
+  const extractId = opts.extractId;
+  if (extractId) pivotRows.forEach(r => { r._extractId = extractId; });
+  const { byKey, dupKeys } = buildIndex(pivotRows, P);
+  const scope = opts.scope || null;
+
+  // 1) Regrouper les enregistrements de l'export par ligne de pivot (doublons d'export -> max par métrique)
+  const hits = new Map();   // pivotIdx -> { recs:[], matchedBy }
+  const unmatchedRecords = [];
+  for (const rec of records) {
+    let found = null;
+    for (const id of rec.ids) {
+      const k = rec.pivotPlatform + '|' + id;
+      if (byKey.has(k)) { found = { idxs: byKey.get(k), id, dup: dupKeys.has(k) }; break; }
+    }
+    if (!found) { unmatchedRecords.push(rec); continue; }
+    for (const idx of found.idxs) {
+      if (!hits.has(idx)) hits.set(idx, { recs: [], by: found.id, dup: found.dup });
+      hits.get(idx).recs.push(rec);
+    }
+  }
+
+  // 2) Calculer les changements ligne par ligne
+  const lines = [];
+  pivotRows.forEach((r, idx) => {
+    const plat = String(r[P.platform] ?? '').trim().toLowerCase();
+    if (!WRITABLE[plat]) return;
+    if (scope && !scope.has(r.row)) return;
+    if (opts.platforms && !opts.platforms.has(plat)) return;   // plateforme absente des exports déposés : on n'y touche pas
+    const hit = hits.get(idx);
+    if (!hit) { lines.push({ row: r.row, platform: plat, status: 'non_trouve', changes: {}, flags: [], engagement: { old: num(r[P.engagement]), new: num(r[P.engagement]), delta: 0 }, visibilityOld: num(r[P.visibility]) }); return; }
+
+    // doublons d'export : on garde le max par métrique avant comparaison
+    const best = {};
+    for (const rec of hit.recs) for (const [m, v] of Object.entries(rec.metrics)) {
+      if (v !== null && (best[m] === undefined || v > best[m])) best[m] = v;
+    }
+    const rec0 = hit.recs[0];
+    const changes = {}, flags = [];
+    if (hit.recs.length > 1) flags.push('doublon_export');
+    if (hit.dup) flags.push('doublon_pivot');
+    if (rec0.flags && rec0.flags.includes('metriques_du_tweet_original')) flags.push('retweet');
+
+    const before = {}, after = {};
+    for (const m of Object.keys(P.metrics)) { before[m] = num(r[colFor(P, plat, m)]); after[m] = before[m]; }
+
+    let status = 'inchange', drops = 0;
+    for (const m of WRITABLE[plat]) {
+      const d = decide(m, before[m], best[m] === undefined ? null : best[m], rec0);
+      if (d.action === 'fill' || d.action === 'raise') { changes[m] = { old: before[m], new: d.value, kind: d.action, column: colFor(P, plat, m) }; after[m] = d.value; }
+      else if (d.action === 'drop') { drops++; flags.push(`baisse_${m}`); changes[m] = { old: before[m], new: before[m], incoming: d.incoming, kind: 'drop', column: colFor(P, plat, m) }; }
+    }
+    const written = Object.values(changes).filter(c => c.kind === 'fill' || c.kind === 'raise').length;
+    status = written ? 'mis_a_jour' : (drops ? 'baisse_signalee' : 'inchange');
+    if (written && drops) status = 'mis_a_jour_avec_baisse';
+
+    const saBefore = num(r[P.engagement]) ?? socialActions(before);
+    const saAfter = socialActions(after);
+    lines.push({
+      row: r.row, platform: plat, status, matchedBy: hit.by, changes, flags,
+      engagement: { old: saBefore, new: saAfter, delta: saAfter - saBefore },
+      views: { old: before.views, new: after.views, delta: (after.views ?? 0) - (before.views ?? 0) },
+      visibilityOld: num(r[P.visibility]),
+    });
+  });
+
+  const count = (s) => lines.filter(l => l.status === s).length;
+  return {
+    lines,
+    unmatchedRecords,
+    summary: {
+      pivotRowsInScope: lines.length,
+      mis_a_jour: count('mis_a_jour'),
+      mis_a_jour_avec_baisse: count('mis_a_jour_avec_baisse'),
+      baisse_signalee: count('baisse_signalee'),
+      inchange: count('inchange'),
+      non_trouve: count('non_trouve'),
+      exportRecordsNotInPivot: unmatchedRecords.length,
+      doublonsPivot: lines.filter(l => l.flags.includes('doublon_pivot')).length,
+      doublonsExport: lines.filter(l => l.flags.includes('doublon_export')).length,
+    },
+  };
+}
+
+const api = { planUpdate, socialActions, decide, roundingStep, detectPivotFormat, colFor, WRITABLE, PIVOT_COLS_OLD, PIVOT_COLS_VMD };
+
+return api;
+})();
+/* la fonction d'ID de l'extension est la source unique */
+ApifyN.setExtractId((u)=>{const r=extractId(u);return r&&r.st==='ok'?r.id:null;});
+
+/* ═════════ Onglet Mise à jour : performances du pivot depuis des exports Apify ═════════ */
+const MAJ_COLS=[['eng','Ancien engagement total'],['vis','Ancienne visibilité'],['st','Statut de mise à jour'],['deng','Écart engagement'],['dvis','Écart visibilité']];
+const PLAT_LABEL={instagram:'Instagram',tiktok:'TikTok',youtube:'YouTube',x:'X / Twitter',facebook:'Facebook'};
+const todayStr=()=>{const d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');};
+const idOnly=(u)=>{const r=extractId(u);return r&&r.st==='ok'?r.id:null;};
+
+/* ── lecture des fichiers (json / csv / xlsx) ── */
+function parseCSV(text){
+  if(text.charCodeAt(0)===0xFEFF)text=text.slice(1);
+  const nl=text.search(/\r?\n/),first=nl>0?text.slice(0,nl):text;
+  const cnt=(ch)=>first.split(ch).length-1;
+  const delim=(cnt(';')>cnt(',')&&cnt(';')>=cnt('\t'))?';':(cnt('\t')>cnt(',')?'\t':',');
+  const rows=[];let row=[],f='',q=false,i=0;const n=text.length;
+  while(i<n){const c=text[i];
+    if(q){if(c==='"'){if(text[i+1]==='"'){f+='"';i+=2;continue;}q=false;i++;continue;}f+=c;i++;continue;}
+    if(c==='"'){q=true;i++;continue;}
+    if(c===delim){row.push(f);f='';i++;continue;}
+    if(c==='\n'||c==='\r'){if(c==='\r'&&text[i+1]==='\n')i++;row.push(f);f='';rows.push(row);row=[];i++;continue;}
+    f+=c;i++;}
+  if(f!==''||row.length){row.push(f);rows.push(row);}
+  if(!rows.length)return [];
+  const hdr=rows[0].map(x=>String(x).trim()),out=[];
+  for(let r=1;r<rows.length;r++){const rw=rows[r];if(rw.length===1&&rw[0]==='')continue;const o={};for(let j=0;j<hdr.length;j++){const v=rw[j];o[hdr[j]]=(v===undefined||v==='')?null:v;}out.push(o);}
+  return out;
+}
+async function readExportFile(file){
+  const ext=(file.name.split('.').pop()||'').toLowerCase(),warn=[];
+  if(ext==='json'){
+    const t=await file.text();let d=JSON.parse(t.replace(/^﻿/,''));
+    if(!Array.isArray(d)){const k=d&&typeof d==='object'?Object.keys(d).find(x=>Array.isArray(d[x])):null;d=k?d[k]:null;}
+    if(!d)throw new Error('JSON : tableau de lignes introuvable.');
+    return {rows:d,warn};
+  }
+  if(ext==='csv'||ext==='txt'){
+    const buf=await file.arrayBuffer();let t;
+    try{t=new TextDecoder('utf-8',{fatal:true}).decode(buf);}catch(e){t=new TextDecoder('windows-1252').decode(buf);}
+    return {rows:parseCSV(t),warn};
+  }
+  if(ext==='xlsx'||ext==='xls'||ext==='xlsm'){
+    if(typeof XLSX==='undefined')throw new Error('Lecteur Excel indisponible (réseau) : réexportez ce fichier en CSV ou JSON.');
+    const wb=XLSX.read(await file.arrayBuffer(),{type:'array'});
+    const rows=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{defval:null,raw:true});
+    const bigNum=rows.slice(0,300).some(r=>['id','postId','facebookId','conversationId'].some(k=>typeof r[k]==='number'&&r[k]>=1e15));
+    if(bigNum)warn.push('Identifiants stockés comme nombres dans ce fichier : ils ont pu être tronqués (15 chiffres). Préférez le fichier brut d\'Apify ou un export CSV/JSON.');
+    return {rows,warn};
+  }
+  throw new Error('Format non pris en charge (.'+ext+').');
+}
+
+/* ── lecture du pivot (colonnes utiles uniquement) ── */
+async function loadPivotForUpdate(scope){
+  const pv=await Excel.run(async(ctx)=>{
+    const wl=ctx.workbook.worksheets;wl.load('items/name');await ctx.sync();
+    const nm=(window.__realNames&&window.__realNames.DATA)||(wl.items.find(s=>s.name.trim().toLowerCase()==='data')||{}).name;
+    if(!nm)throw new Error('Onglet DATA introuvable dans ce classeur.');
+    const sh=ctx.workbook.worksheets.getItem(nm);
+    const ur=sh.getUsedRange(true);ur.load('rowIndex,columnIndex,rowCount,columnCount');await ctx.sync();
+    const hr=sh.getRangeByIndexes(ur.rowIndex,ur.columnIndex,1,ur.columnCount);hr.load('values');await ctx.sync();
+    const headers=hr.values[0].map(v=>String(v==null?'':v).trim());
+    const P=PivotUpd.detectPivotFormat(headers);
+    if(!P)throw new Error('Format du pivot non reconnu : colonnes « ID post / Plateforme » ou « Post_id / social_media » introuvables.');
+    const idx={};headers.forEach((hh,i)=>{const k=hh.toLowerCase();if(k&&idx[k]===undefined)idx[k]=ur.columnIndex+i;});
+    const need=[P.platform,P.id,P.url,P.engagement,P.visibility,...Object.values(P.metrics),...Object.values(P.viewsByPlatform||{})];
+    const cidx={},miss=[];
+    need.forEach(nme=>{const c=idx[nme.trim().toLowerCase()];if(c===undefined)miss.push(nme.trim());else cidx[nme]=c;});
+    if(miss.length)throw new Error('Colonne(s) introuvable(s) dans DATA : '+[...new Set(miss)].join(', '));
+    const firstIdx=2,lastIdx=ur.rowIndex+ur.rowCount-1;   // la ligne Excel 3 est la 1re ligne de données (la 2 est le modèle)
+    const names=Object.keys(cidx),rows=[];
+    for(let r0=firstIdx;r0<=lastIdx;r0+=20000){
+      const n=Math.min(20000,lastIdx-r0+1);
+      const rgs=names.map(nm2=>{const rg=sh.getRangeByIndexes(r0,cidx[nm2],n,1);rg.load('values');return rg;});
+      await ctx.sync();
+      for(let i=0;i<n;i++){const o={row:r0+i+1};for(let k=0;k<names.length;k++){const v=rgs[k].values[i][0];o[names[k]]=v===''?null:v;}rows.push(o);}
+    }
+    let scopeSet=null;
+    if(scope==='visible'&&lastIdx>=firstIdx){
+      const rg=sh.getRangeByIndexes(firstIdx,cidx[P.platform],lastIdx-firstIdx+1,1);
+      const vis=rg.getSpecialCellsOrNullObject(Excel.SpecialCellType.visible);vis.load('isNullObject');await ctx.sync();
+      if(!vis.isNullObject){
+        vis.areas.load('items/rowIndex,items/rowCount');await ctx.sync();
+        const tot=vis.areas.items.reduce((a,x)=>a+x.rowCount,0);
+        if(tot<lastIdx-firstIdx+1){scopeSet=new Set();vis.areas.items.forEach(a=>{for(let k=0;k<a.rowCount;k++)scopeSet.add(a.rowIndex+k+1);});}
+      }
+    }
+    // colonnes ajoutées : réutilisées si elles existent déjà, sinon à la suite de la dernière colonne
+    let next=ur.columnIndex+ur.columnCount;const newCols={};
+    MAJ_COLS.forEach(([k,label])=>{const c=idx[label.toLowerCase()];if(c!==undefined)newCols[k]={c,name:label,exists:true};else newCols[k]={c:next++,name:label,exists:false};});
+    return {sheet:nm,P,rows,scope:scopeSet,cidx,newCols,headerRow:ur.rowIndex,firstIdx,lastIdx};
+  });
+  if(scope==='selection'){
+    const s=await getSel();
+    if(s.sheet!==pv.sheet)throw new Error('Sélectionnez des lignes dans l\'onglet « '+pv.sheet+' » (la sélection actuelle est dans « '+s.sheet+' »).');
+    pv.scope=new Set();s.areas.forEach(a=>{for(let k=0;k<a.rowCount;k++)pv.scope.add(a.rowIndex+k+1);});
+  }
+  return pv;
+}
+
+/* ── plan d'écriture : mesures + colonnes de suivi ── */
+const baisseList=(l)=>l.flags.filter(f=>f.indexOf('baisse_')===0).map(f=>f.slice(7)).join(', ');
+function statusText(l,date){
+  switch(l.status){
+    case 'mis_a_jour':return 'Mis à jour '+date;
+    case 'mis_a_jour_avec_baisse':return 'Mis à jour '+date+' · baisse ignorée ('+baisseList(l)+')';
+    case 'baisse_signalee':return 'Baisse ignorée '+date+' ('+baisseList(l)+')';
+    case 'inchange':return 'Inchangé '+date;
+    default:return 'Non trouvé dans l\'export '+date;
+  }
+}
+function buildWrites(pv,res){
+  const P=pv.P,nc=pv.newCols,date=todayStr(),w=[],cnt={metricCells:0,rowsTouched:0,statuts:0};
+  const engL=colL(pv.cidx[P.engagement]),visL=colL(pv.cidx[P.visibility]);
+  const aeL=colL(nc.eng.c),avL=colL(nc.vis.c);
+  if(res.lines.length)MAJ_COLS.forEach(([k])=>{if(!nc[k].exists)w.push({r:pv.headerRow,c:nc[k].c,v:nc[k].name,expect:'empty'});});
+  for(const l of res.lines){
+    const r0=l.row-1,xr=l.row;
+    for(const m of Object.keys(l.changes)){
+      const ch=l.changes[m];if(ch.kind!=='fill'&&ch.kind!=='raise')continue;
+      w.push({r:r0,c:pv.cidx[ch.column],v:ch.new,expect:ch.kind==='fill'?'empty':'eq',before:ch.old});cnt.metricCells++;
+    }
+    if(Object.values(l.changes).some(c=>c.kind==='fill'||c.kind==='raise'))cnt.rowsTouched++;
+    w.push({r:r0,c:nc.st.c,v:statusText(l,date),expect:'any'});cnt.statuts++;
+    if(l.status!=='non_trouve'){
+      if(l.engagement&&l.engagement.old!==null)w.push({r:r0,c:nc.eng.c,v:l.engagement.old,expect:'any'});
+      if(l.visibilityOld!==null&&l.visibilityOld!==undefined)w.push({r:r0,c:nc.vis.c,v:l.visibilityOld,expect:'any'});
+      w.push({r:r0,c:nc.deng.c,formula:`=IF(ISNUMBER(${engL}${xr}),${engL}${xr},0)-IF(ISNUMBER(${aeL}${xr}),${aeL}${xr},0)`,expect:'any'});
+      w.push({r:r0,c:nc.dvis.c,formula:`=IF(ISNUMBER(${visL}${xr}),${visL}${xr},0)-IF(ISNUMBER(${avL}${xr}),${avL}${xr},0)`,expect:'any'});
+    }
+  }
+  return {writes:w,counts:cnt};
+}
+
+/* recalcul automatique suspendu pendant l'écriture (le pivot a des RECHERCHEV/INDEX très lourds), puis rétabli */
+async function withManualCalc(fn){
+  let prev=null;
+  try{await Excel.run(async(ctx)=>{const a=ctx.workbook.application;a.load('calculationMode');await ctx.sync();prev=a.calculationMode;if(prev!=='Manual'){a.calculationMode='Manual';await ctx.sync();}});}catch(e){prev=null;}
+  try{return await fn();}
+  finally{if(prev&&prev!=='Manual'){try{await Excel.run(async(ctx)=>{ctx.workbook.application.calculationMode=prev;await ctx.sync();});}catch(e){}}}
+}
+async function selectDataRow(sheet,row){
+  await Excel.run(async(ctx)=>{const ws=ctx.workbook.worksheets.getItem(sheet);ws.activate();ws.getRange(row+':'+row).select();await ctx.sync();});
+}
+
+function UpdateTab(p){
+  const {onToast,onWritten}=p;
+  const [files,setFiles]=useState([]);
+  const [scope,setScope]=useState('visible');
+  const [plan,setPlan]=useState(null);
+  const [busy,setBusy]=useState('');
+  const [prog,setProg]=useState('');
+  const [err,setErr]=useState('');
+  const [armed,setArmed]=useState(false);
+  const [drag,setDrag]=useState(false);
+  const box={background:'#fff',border:'1px solid #e2e8f0',borderRadius:10,padding:'.65rem .75rem',marginBottom:10};
+  const td={padding:'3px 5px',borderBottom:'1px solid #f1f5f9',verticalAlign:'top',fontSize:'.72rem'};
+  const errBox=(t)=>h('div',{style:{background:'#fef2f2',border:'1px solid #fecaca',color:'#b91c1c',borderRadius:6,padding:'5px 8px',fontSize:'.74rem',marginTop:8}},t);
+  const msg=(e)=>String(e&&e.message?e.message:e);
+
+  const addFiles=async(list)=>{
+    setErr('');setPlan(null);setArmed(false);setBusy('read');
+    const out=[...files];
+    for(const f of Array.from(list)){
+      const it={name:f.name};
+      try{
+        setProg('Lecture de '+f.name+'…');await new Promise(r=>setTimeout(r,20));
+        const {rows,warn}=await readExportFile(f);
+        const r=ApifyN.normalizeExport(rows,f.name);
+        Object.assign(it,{platform:r.platform,by:r.detectedBy,stats:r.stats,records:r.records,skipped:r.skipped,warn,rowsN:rows.length});
+        if(!r.platform)it.err='Source Apify non reconnue : ni le nom du fichier ni les colonnes ne correspondent.';
+      }catch(e){it.err=msg(e);}
+      out.push(it);
+    }
+    setFiles(out);setBusy('');setProg('');
+  };
+  const analyse=async()=>{
+    setErr('');setPlan(null);setArmed(false);setBusy('plan');
+    try{
+      const ok=files.filter(f=>f.records&&f.records.length);
+      if(!ok.length)throw new Error('Déposez d\'abord au moins un export Apify reconnu.');
+      const recs=ok.flatMap(f=>f.records);
+      setProg('Lecture du pivot…');
+      const pv=await loadPivotForUpdate(scope);
+      setProg('Calcul…');await new Promise(r=>setTimeout(r,20));
+      const platforms=new Set(recs.map(r=>r.pivotPlatform));
+      const res=PivotUpd.planUpdate(pv.rows,recs,{cols:pv.P,extractId:idOnly,scope:pv.scope,platforms});
+      const wr=buildWrites(pv,res);
+      const notIn={};res.unmatchedRecords.forEach(r=>{notIn[r.pivotPlatform]=(notIn[r.pivotPlatform]||0)+1;});
+      setPlan({sheet:pv.sheet,fmt:pv.P.name,nrows:pv.rows.length,scopeN:pv.scope?pv.scope.size:null,res,writes:wr.writes,counts:wr.counts,notIn,newCols:MAJ_COLS.filter(([k])=>!pv.newCols[k].exists).length});
+    }catch(e){setErr(msg(e));}
+    setBusy('');setProg('');
+  };
+  const go=async()=>{
+    if(!armed){setArmed(true);return;}
+    setArmed(false);setBusy('write');setErr('');
+    try{
+      const r=await withManualCalc(()=>writeChanges(plan.sheet,plan.writes,(a,b)=>setProg('Écriture '+a+' / '+b+'…')));
+      onToast((plan.counts.rowsTouched)+' ligne'+(plan.counts.rowsTouched>1?'s':'')+' mise'+(plan.counts.rowsTouched>1?'s':'')+' à jour ('+r.n+' cellules écrites'+(r.skipped?' · '+r.skipped+' non touchée'+(r.skipped>1?'s':'')+' car modifiée'+(r.skipped>1?'s':'')+' entre-temps':'')+').');
+      setPlan(null);onWritten&&onWritten();
+    }catch(e){setErr(msg(e));}
+    setBusy('');setProg('');
+  };
+
+  const S=plan?plan.res.summary:null;
+  const rowLinks=(rows,max)=>rows.slice(0,max||12).map((x,i)=>h('span',{key:x},i?', ':'',h('span',{className:'rl',onClick:()=>selectDataRow(plan.sheet,x)},x))).concat(rows.length>(max||12)?[h('span',{key:'+'},' … (+'+(rows.length-(max||12))+')')]:[]);
+  const copyRows=(rows)=>h('button',{style:{...BTN_N,padding:'1px 7px',fontSize:'.68rem',marginLeft:6},onClick:()=>copyText(rows.join(', '),(ok)=>onToast(ok?'Numéros de lignes copiés.':'Copie impossible.'))},'📋 Copier');
+  const lines=plan?plan.res.lines:[];
+  const drops=lines.filter(l=>l.flags.some(f=>f.indexOf('baisse_')===0));
+  const notFound=lines.filter(l=>l.status==='non_trouve');
+  const changed=lines.filter(l=>l.status==='mis_a_jour'||l.status==='mis_a_jour_avec_baisse');
+  const chip=(t,c,bg)=>h('span',{style:{background:bg,color:c,borderRadius:99,padding:'2px 8px',fontSize:'.72rem',fontWeight:700,marginRight:5,display:'inline-block',marginBottom:4}},t);
+
+  return h('div',null,
+    h('div',{style:{background:'#eff6ff',border:'1px solid #bfdbfe',borderRadius:8,padding:'6px 10px',fontSize:'.74rem',color:'#1e3a8a',marginBottom:10,lineHeight:1.5}},
+      "Déposez les exports bruts d'Apify (JSON, CSV ou XLSX). La plateforme est reconnue d'après le nom du fichier, sinon d'après ses colonnes. Les lignes du pivot sont retrouvées par plateforme + ID (ou ID extrait de l'URL) ; pour chaque mesure on garde la plus haute valeur. Rien n'est écrit sans confirmation."),
+    h('div',{style:box},
+      h('div',{style:{fontWeight:800,fontSize:'.86rem',marginBottom:6}},'1 · Exports Apify'),
+      h('label',{onDragOver:(e)=>{e.preventDefault();setDrag(true);},onDragLeave:()=>setDrag(false),onDrop:(e)=>{e.preventDefault();setDrag(false);if(e.dataTransfer&&e.dataTransfer.files.length)addFiles(e.dataTransfer.files);},
+        style:{display:'block',border:'2px dashed '+(drag?'#2563eb':'#cbd5e1'),background:drag?'#eff6ff':'#f8fafc',borderRadius:8,padding:'14px 8px',textAlign:'center',fontSize:'.76rem',color:'#475569',cursor:'pointer'}},
+        'Glissez les fichiers ici ou cliquez pour les choisir',
+        h('input',{type:'file',multiple:true,accept:'.json,.csv,.xlsx,.xls,.txt',style:{display:'none'},onChange:(e)=>{if(e.target.files.length)addFiles(e.target.files);e.target.value='';}})),
+      files.length?h('div',{style:{marginTop:8}},files.map((f,i)=>h('div',{key:i,style:{border:'1px solid '+(f.err?'#fecaca':'#e2e8f0'),background:f.err?'#fef2f2':'#fff',borderRadius:6,padding:'5px 8px',marginBottom:5,fontSize:'.73rem'}},
+        h('div',{style:{display:'flex',justifyContent:'space-between',gap:6}},
+          h('strong',{style:{wordBreak:'break-all'}},f.name),
+          h('span',{className:'rl',onClick:()=>{setFiles(files.filter((_,j)=>j!==i));setPlan(null);}},'retirer')),
+        f.err?h('div',{style:{color:'#b91c1c'}},f.err):h('div',{style:{color:'#475569'}},
+          (PLAT_LABEL[f.platform]||f.platform)+' ('+(f.by==='nom_de_fichier'?'reconnu par le nom':'reconnu par les colonnes')+') · '+f.stats.kept+' contenu'+(f.stats.kept>1?'s':'')+' sur '+f.rowsN+' lignes'+
+          (f.stats.skipped?' · '+f.stats.skipped+' ignorée'+(f.stats.skipped>1?'s':'')+' ('+[...new Set(f.skipped.map(s=>s.reason))].slice(0,3).join(' ; ')+')':'')+
+          (f.stats.duplicateKeys?' · '+f.stats.duplicateKeys+' doublon(s)':'')),
+        (f.warn||[]).map((x,k)=>h('div',{key:k,style:{color:'#b45309'}},'⚠️ '+x))))):null),
+    h('div',{style:box},
+      h('div',{style:{fontWeight:800,fontSize:'.86rem',marginBottom:6}},'2 · Lignes du pivot à mettre à jour'),
+      h('div',{style:{display:'flex',gap:6,flexWrap:'wrap',marginBottom:8}},
+        modeBtn2(scope,setScope,'selection','Sélection actuelle'),
+        modeBtn2(scope,setScope,'visible','Données filtrées'),
+        modeBtn2(scope,setScope,'all','Tout le pivot')),
+      h('div',{style:{fontSize:'.7rem',color:'#64748b',marginBottom:8}},scope==='selection'?'Les lignes touchées par votre sélection dans l\'onglet DATA (une cellule suffit pour une ligne).':scope==='visible'?'Seules les lignes affichées dans DATA sont traitées (filtres actifs ; sans filtre, c\'est tout le pivot).':'Toutes les lignes de DATA, filtres et lignes masquées compris.'),
+      h('button',{style:BTN_B,disabled:!!busy||!files.some(f=>f.records&&f.records.length),onClick:analyse},busy==='plan'?'Analyse…':'🔎 Analyser'),
+      busy&&prog?h('span',{style:{marginLeft:8,fontSize:'.74rem',color:'#64748b'}},prog):null,
+      err?errBox(err):null),
+    plan?h('div',{style:box},
+      h('div',{style:{fontWeight:800,fontSize:'.86rem',marginBottom:6}},'3 · Aperçu'),
+      h('div',{style:{fontSize:'.72rem',color:'#64748b',marginBottom:8}},'Feuille « '+plan.sheet+' » · format '+plan.fmt+' · '+fmtN(plan.nrows)+' lignes lues · périmètre : '+(plan.scopeN===null?'toutes les lignes':fmtN(plan.scopeN)+' lignes')+' · plateformes traitées : '+[...new Set(lines.map(l=>l.platform))].join(', ')),
+      h('div',null,
+        chip('✅ '+S.mis_a_jour+' mise'+(S.mis_a_jour>1?'s':'')+' à jour','#166534','#dcfce7'),
+        S.mis_a_jour_avec_baisse?chip('⚠️ '+S.mis_a_jour_avec_baisse+' avec baisse ignorée','#92400e','#fef3c7'):null,
+        S.baisse_signalee?chip('⚠️ '+S.baisse_signalee+' baisse ignorée seule','#92400e','#fef3c7'):null,
+        chip('= '+S.inchange+' inchangée'+(S.inchange>1?'s':''),'#475569','#f1f5f9'),
+        chip('❓ '+S.non_trouve+' non trouvée'+(S.non_trouve>1?'s':''),'#9a3412','#ffedd5')),
+      changed.length?h('div',{style:{overflowX:'auto',margin:'6px 0 8px'}},h('table',{style:{width:'100%',borderCollapse:'collapse'}},h('tbody',null,
+        changed.slice(0,8).map((l,i)=>h('tr',{key:i},
+          h('td',{style:{...td,color:'#94a3b8'}},h('span',{className:'rl',onClick:()=>selectDataRow(plan.sheet,l.row)},l.row)),
+          h('td',{style:td},l.platform),
+          h('td',{style:td},Object.entries(l.changes).filter(([m,c])=>c.kind!=='drop').map(([m,c])=>m+' '+(c.old===null?'—':fmtN(c.old))+' → '+fmtN(c.new)).join(' · ')),
+          h('td',{style:{...td,color:l.engagement.delta?'#166534':'#64748b',whiteSpace:'nowrap'}},l.engagement.delta?'eng. '+(l.engagement.delta>0?'+':'')+fmtN(l.engagement.delta):'')))))):null,
+      drops.length?h('div',{style:{fontSize:'.74rem',color:'#92400e',background:'#fffbeb',border:'1px solid #fde68a',borderRadius:6,padding:'5px 8px',marginBottom:6}},
+        h('strong',null,'Baisses ignorées ('+drops.length+') : '),'l\'export est plus bas que le pivot, l\'ancienne valeur est conservée. Lignes ',rowLinks(drops.map(l=>l.row)),copyRows(drops.map(l=>l.row))):null,
+      notFound.length?h('div',{style:{fontSize:'.74rem',color:'#9a3412',background:'#fff7ed',border:'1px solid #fed7aa',borderRadius:6,padding:'5px 8px',marginBottom:6}},
+        h('strong',null,'Non trouvées dans les exports ('+notFound.length+') : '),'post supprimé, compte non collecté ou ID différent. Les données passées sont conservées. Lignes ',rowLinks(notFound.map(l=>l.row)),copyRows(notFound.map(l=>l.row))):null,
+      (S.doublonsPivot||S.doublonsExport)?h('div',{style:{fontSize:'.73rem',color:'#475569',marginBottom:6}},(S.doublonsPivot?S.doublonsPivot+' ligne(s) du pivot partagent un même ID (toutes mises à jour). ':'')+(S.doublonsExport?S.doublonsExport+' contenu(s) présent(s) plusieurs fois dans les exports (maximum retenu).':'')):null,
+      S.exportRecordsNotInPivot?h('div',{style:{fontSize:'.73rem',color:'#64748b',marginBottom:6}},fmtN(S.exportRecordsNotInPivot)+' contenu'+(S.exportRecordsNotInPivot>1?'s':'')+' des exports ne figurent pas dans le pivot (ni dans le périmètre choisi) : ignoré'+(S.exportRecordsNotInPivot>1?'s':'')+'.'):null,
+      plan.res.lines.some(l=>l.flags.includes('retweet'))?h('div',{style:{fontSize:'.72rem',color:'#64748b',marginBottom:6}},'Retweets X : les performances sont celles du tweet d\'origine (comportement d\'Apify).'):null,
+      h('div',{style:{fontSize:'.72rem',color:'#64748b',marginBottom:8}},'Colonnes de suivi'+(plan.newCols?' (à créer à la suite du tableau : '+plan.newCols+')':'')+' : ancien engagement total, ancienne visibilité, statut de mise à jour, écart engagement, écart visibilité.'),
+      plan.writes.length?h('div',null,
+        h('button',{style:armed?{...BTN_F,padding:'6px 12px'}:{...BTN_B,padding:'6px 12px'},disabled:!!busy,onClick:go},
+          busy==='write'?('Écriture…'+(prog?' '+prog:'')):armed?'⚠️ Confirmer : écrire '+fmtN(plan.writes.length)+' cellules (non annulable par Ctrl+Z)':'✍️ Mettre à jour le pivot ('+fmtN(plan.writes.length)+' cellules)'),
+        armed?h('button',{style:{...BTN_N,marginLeft:6},onClick:()=>setArmed(false)},'Annuler'):null,
+        armed?h('div',{style:{fontSize:'.7rem',color:'#64748b',marginTop:6}},'Le recalcul automatique est suspendu pendant l\'écriture puis rétabli : Excel recalcule ensuite tout le classeur, ce qui peut prendre un moment. Enregistrez une copie du fichier avant de continuer si besoin.'):null):
+        h('div',{style:{fontSize:'.76rem',color:'#64748b'}},'Rien à écrire.'),
+      err?errBox(err):null):null);
+}
 
 /* ═════════ Interface ═════════ */
 const h=React.createElement;
@@ -1773,7 +2563,8 @@ function PivotVerifier(){
       h('div',{style:{display:'flex',gap:6,marginTop:7}},
         h('button',{onClick:()=>setTab('verif'),style:{...btn(tab==='verif'?'#1e293b':'#fff',tab==='verif'?'#fff':'#334155','#1e293b'),flex:1}},'🔍 Vérifications'),
         h('button',{onClick:()=>setTab('analyse'),style:{...btn(tab==='analyse'?'#1e293b':'#fff',tab==='analyse'?'#fff':'#334155','#1e293b'),flex:1}},'📈 Analyse'),
-        h('button',{onClick:()=>setTab('outils'),style:{...btn(tab==='outils'?'#1e293b':'#fff',tab==='outils'?'#fff':'#334155','#1e293b'),flex:1}},'🛠 Outils')),
+        h('button',{onClick:()=>setTab('outils'),style:{...btn(tab==='outils'?'#1e293b':'#fff',tab==='outils'?'#fff':'#334155','#1e293b'),flex:1}},'🛠 Outils'),
+        h('button',{onClick:()=>setTab('maj'),style:{...btn(tab==='maj'?'#1e293b':'#fff',tab==='maj'?'#fff':'#334155','#1e293b'),flex:1,fontSize:'.7rem',padding:'4px 5px'}},'🔄 Mise à jour')),
       (results.length&&tab==='verif')?h('div',{style:{display:'flex',flexWrap:'wrap',gap:5,marginTop:7,alignItems:'center'}},
         chip('🔴 '+bl.length+' bloquant'+(bl.length>1?'s':''),bl.length?'#fee2e2':'#e2e8f0',bl.length?'#b91c1c':'#64748b'),
         chip('🟠 '+vf.length+' à vérifier',vf.length?'#fef3c7':'#e2e8f0',vf.length?'#b45309':'#64748b'),
@@ -1811,7 +2602,8 @@ function PivotVerifier(){
       h(Group,{title:'ℹ️ Informations',accent:'#0369a1',count:infos.length,open:openG.has('i'),onToggle:()=>flip(setOpenG,'i')},infos.map(r=>cardFor(r,'i'))),
       h(Group,{title:'✅ Contrôles OK',accent:'#15803d',count:oks.length,open:openG.has('ok'),onToggle:()=>flip(setOpenG,'ok')},oks.map(r=>cardFor(r,'ok'))))),
     h('div',{style:{display:tab==='analyse'?'block':'none'},onClick:onClickReport},h(AnalyseMemo,{tops,brand:recapBrand,onBrand:setRecapBrand,onToast:setToast})),
-    h('div',{style:{display:tab==='outils'?'block':'none'},onClick:onClickReport},h(OutilsTab,{onToast:setToast,onWritten:()=>{if(!(window.__realNames&&window.__realNames.DATA))return;quietRef.current=Date.now()+4000;setTimeout(()=>runRef.current&&runRef.current(undefined,true),600);}})));
+    h('div',{style:{display:tab==='outils'?'block':'none'},onClick:onClickReport},h(OutilsTab,{onToast:setToast,onWritten:()=>{if(!(window.__realNames&&window.__realNames.DATA))return;quietRef.current=Date.now()+4000;setTimeout(()=>runRef.current&&runRef.current(undefined,true),600);}})),
+    h('div',{style:{display:tab==='maj'?'block':'none'},onClick:onClickReport},h(UpdateTab,{onToast:setToast,onWritten:()=>{if(!(window.__realNames&&window.__realNames.DATA))return;quietRef.current=Date.now()+4000;setTimeout(()=>runRef.current&&runRef.current(undefined,true),600);}})));
 }
 
 Office.onReady(()=>{ReactDOM.createRoot(document.getElementById('root')).render(h(PivotVerifier));});
