@@ -784,8 +784,8 @@ const plName=(p)=>PLN[p]||(p?String(p).charAt(0).toUpperCase()+String(p).slice(1
 const TITLES={menu:'Outils pivot',formules:'Formules',outils:'Outils',maj:'Mise à jour',analyse:'Analyse',verif:'Vérifications'};
 const svgI=(size,kids,color)=>h('svg',{width:size,height:size,viewBox:'0 0 24 24',fill:'none',stroke:color||'currentColor',strokeWidth:2.2,strokeLinecap:'round',strokeLinejoin:'round','aria-hidden':'true'},kids);
 const IC={
-  back:()=>svgI(20,h('path',{d:'M15 5l-7 7 7 7'})),
-  home:()=>svgI(20,h('path',{d:'M4 11l8-7 8 7M6 10v10h12V10'})),
+  back:()=>svgI(16,h("path",{d:"M15 5l-7 7 7 7"})),
+  home:()=>svgI(16,h('path',{d:'M4 11l8-7 8 7M6 10v10h12V10'})),
   fx:()=>svgI(26,h('path',{d:'M9 4c-2 0-3 1-3 3v10c0 2-1 3-3 3M9 12h6M15 8l4 8M19 8l-4 8'}),'#2563eb'),
   tools:()=>svgI(26,[h('path',{key:1,d:'M4 7h16M4 12h16M4 17h16'}),h('circle',{key:2,cx:9,cy:7,r:2,fill:'#fff'}),h('circle',{key:3,cx:15,cy:12,r:2,fill:'#fff'}),h('circle',{key:4,cx:8,cy:17,r:2,fill:'#fff'})],'#2563eb'),
   sync:()=>svgI(26,h('path',{d:'M20 12a8 8 0 1 1-2.3-5.7M20 4v4h-4'}),'#2563eb'),
@@ -825,10 +825,23 @@ const fNum=(txt,fr)=>{const n=Number(String(txt).trim().replace(',','.'));return
 function specError(s){
   if(!s.src)return 'Choisissez la feuille des données.';
   if(s.kind==='lookup'){
-    if(!s.keyRef)return 'Cliquez sur « Prendre la cellule sélectionnée » pour indiquer la valeur à chercher.';
-    if(s.variant==='h'){if(!(s.keyR>0)||!(s.resR>0))return 'Indiquez le numéro de la ligne où chercher et celui de la ligne à renvoyer.';if(s.resR<s.keyR)return 'La ligne à renvoyer doit être sous la ligne où l\'on cherche (ou la même).';}
-    else{if(s.keyC==null)return 'Choisissez la colonne où chercher.';if(s.resC==null)return 'Choisissez la colonne à renvoyer.';
-      if(s.variant==='v'&&s.resC<s.keyC)return 'RECHERCHEV ne peut pas renvoyer une colonne située à gauche de la colonne de recherche : choisissez INDEX / EQUIV.';}
+    if(s.keyMode==='cell'){if(!s.keyRef)return 'Étape 2 : cliquez sur une cellule dans Excel, puis sur « Prendre la cellule sélectionnée ».';}
+    else if(String(s.keyText).trim()==='')return 'Étape 2 : tapez la valeur à chercher.';
+    else if(s.keyMode==='num'&&fNum(s.keyText,false)===null)return 'Étape 2 : « '+s.keyText+' » n\'est pas un nombre.';
+    if(s.variant==='h'){
+      if(!(s.keyR>0)||!(s.endR>0))return 'Étape 1 : indiquez les numéros de la première et de la dernière ligne où chercher.';
+      if(s.endR<=s.keyR)return 'Étape 1 : la dernière ligne doit être située sous la première.';
+      if(!(s.resR>s.keyR)||s.resR>s.endR)return 'Étape 3 : la ligne à renvoyer doit être sous la première ligne, et dans la zone.';
+    }else if(s.variant==='v'){
+      if(s.keyC==null)return 'Étape 1 : choisissez la première colonne (celle où chercher).';
+      if(s.endC==null)return 'Étape 1 : choisissez la dernière colonne de la zone.';
+      if(s.endC<=s.keyC)return 'Étape 1 : la dernière colonne doit être à droite de la première.';
+      if(s.resC==null)return 'Étape 3 : choisissez la colonne à renvoyer.';
+      if(s.resC<=s.keyC||s.resC>s.endC)return 'Étape 3 : la colonne à renvoyer doit être dans la zone, à droite de la colonne où l\'on cherche.';
+    }else{
+      if(s.keyC==null)return 'Étape 1 : choisissez la colonne où chercher.';
+      if(s.resC==null)return 'Étape 3 : choisissez la colonne à renvoyer.';
+    }
     return null;
   }
   if(s.kind!=='count'&&s.valC==null)return s.kind==='sum'?'Choisissez la colonne à additionner.':'Choisissez la colonne dont faire la moyenne.';
@@ -848,9 +861,9 @@ function buildFormula(s,dr,dc,here,fr){
   const colRng=(a)=>sh+'$'+colL(a)+':$'+colL(a);
   let core;
   if(s.kind==='lookup'){
-    const key=fRef(s.keyRef,dr,dc,here);
-    if(s.variant==='v')core=S('VLOOKUP')+'('+[key,sh+'$'+colL(s.keyC)+':$'+colL(s.resC),String(s.resC-s.keyC+1),fr?'FAUX':'FALSE'].join(sep)+')';
-    else if(s.variant==='h')core=S('HLOOKUP')+'('+[key,sh+'$'+s.keyR+':$'+s.resR,String(s.resR-s.keyR+1),fr?'FAUX':'FALSE'].join(sep)+')';
+    const key=s.keyMode==='cell'?fRef(s.keyRef,dr,dc,here):s.keyMode==='num'?fNum(s.keyText,fr):'"'+String(s.keyText).replace(/"/g,'""')+'"';
+    if(s.variant==='v')core=S('VLOOKUP')+'('+[key,sh+'$'+colL(s.keyC)+':$'+colL(s.endC),String(s.resC-s.keyC+1),fr?'FAUX':'FALSE'].join(sep)+')';
+    else if(s.variant==='h')core=S('HLOOKUP')+'('+[key,sh+'$'+s.keyR+':$'+s.endR,String(s.resR-s.keyR+1),fr?'FAUX':'FALSE'].join(sep)+')';
     else core=S('INDEX')+'('+colRng(s.resC)+sep+S('MATCH')+'('+key+sep+colRng(s.keyC)+sep+'0))';
     if(s.nf==='dash')core=S('IFERROR')+'('+core+sep+'"—")';
     else if(s.nf==='zero')core=S('IFERROR')+'('+core+sep+'0)';
@@ -2975,7 +2988,7 @@ function LastActionBar(p){
     }catch(e){setErr(String(e&&e.message?e.message:e));}
     setBusy('');
   };
-  return h('div',{style:{background:'#fffbeb',border:'1px solid #fde68a',borderRadius:8,padding:'5px 9px',marginTop:7,fontSize:'.72rem',color:'#78350f'}},
+  return h('div',{style:{background:'#fffbeb',border:'1px solid #fde68a',borderRadius:8,padding:'2px 8px',marginTop:4,fontSize:'.7rem',color:'#78350f'}},
     h('div',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',gap:8}},
       h('span',{style:{minWidth:0}},h('strong',null,'Dernière action : '),last.tool+' · '+last.lot.slice(5,16)+' · '+fmtN(last.rows)+' ligne'+(last.rows>1?'s':'')),
       h('span',{style:{whiteSpace:'nowrap'}},
@@ -3726,7 +3739,8 @@ function FormulasTab(p){
   const [fillRows,setFillRows]=useState(1);
   const [keyRef,setKeyRef]=useState(null);
   const [keyC,setKeyC]=useState(null),[resC,setResC]=useState(null),[valC,setValC]=useState(null);
-  const [keyR,setKeyR]=useState(''),[resR,setResR]=useState('');
+  const [keyR,setKeyR]=useState(''),[resR,setResR]=useState(''),[endR,setEndR]=useState(''),[endC,setEndC]=useState(null);
+  const [keyMode,setKeyMode]=useState('cell'),[keyText,setKeyText]=useState('');
   const [nf,setNf]=useState('dash');
   const [crits,setCrits]=useState([{c:null,op:'=',vt:'cell',ref:null,text:''}]);
   const [prev,setPrev]=useState(null);
@@ -3745,16 +3759,16 @@ function FormulasTab(p){
     }catch(e){setErr(msg(e));}
   };
   useEffect(()=>{loadInfo();},[]);
-  const changeSrc=async(n)=>{setKeyC(null);setResC(null);setValC(null);setCrits(cs=>cs.map(c=>({...c,c:null})));setPrev(null);await loadInfo(n);};
+  const changeSrc=async(n)=>{setKeyC(null);setResC(null);setEndC(null);setValC(null);setCrits(cs=>cs.map(c=>({...c,c:null})));setPrev(null);await loadInfo(n);};
 
-  const spec={kind,variant,src,keyC,resC,keyR:Number(keyR)||0,resR:Number(resR)||0,nf,keyRef,valC,crits:kind==='lookup'?[]:crits};
+  const spec={kind,variant,src,keyC,resC,endC,keyR:Number(keyR)||0,resR:Number(resR)||0,endR:Number(endR)||0,keyMode,keyText,nf,keyRef,valC,crits:kind==='lookup'?[]:crits};
   live.current={spec,target};
   const specKey=JSON.stringify([spec,target&&[target.sheet,target.r,target.c],info&&info.sheet,info&&info.headerRow]);
 
   const gather=async()=>{
     const s=spec,from=info.headerRow+1,d={colV:{},rowV:{},critVals:[]};
     if(s.kind==='lookup'){
-      d.keyVal=await readFCell(s.keyRef.sheet,s.keyRef.r,s.keyRef.c);
+      d.keyVal=s.keyMode==='cell'?await readFCell(s.keyRef.sheet,s.keyRef.r,s.keyRef.c):s.keyMode==='num'?Number(fNum(s.keyText,false)):s.keyText;
       if(s.variant==='h')d.rowV=await readFRows(s.src,[s.keyR,s.resR]);else d.colV=await readFCols(s.src,[s.keyC,s.resC],from);
     }else{
       const cols=s.crits.map(c=>c.c).concat(s.kind==='count'?[]:[s.valC]);
@@ -3833,11 +3847,14 @@ function FormulasTab(p){
     h('button',{style:{...BTN_N,padding:'2px 8px'},onClick:()=>smartRef(setter)},rf?'Reprendre la cellule sélectionnée':'Prendre la cellule sélectionnée'),
     rf?h('label',{style:{fontSize:'.7rem',color:'#475569'}},h('input',{type:'checkbox',checked:rf.fixC,onChange:e=>setter({...rf,fixC:e.target.checked})}),' colonne fixe'):null,
     rf?h('label',{style:{fontSize:'.7rem',color:'#475569'}},h('input',{type:'checkbox',checked:rf.fixR,onChange:e=>setter({...rf,fixR:e.target.checked})}),' ligne fixe'):null);
+  const step=(n,t,hint,body)=>h('div',{style:{display:'flex',gap:8,marginBottom:10}},
+    h('div',{style:{width:22,height:22,borderRadius:'50%',background:'#1e293b',color:'#fff',fontSize:'.74rem',fontWeight:800,display:'flex',alignItems:'center',justifyContent:'center',flex:'none',marginTop:1}},n),
+    h('div',{style:{flex:1,minWidth:0}},h('div',{style:{fontSize:'.8rem',fontWeight:800}},t),h('div',{style:{fontSize:'.7rem',color:'#64748b',marginBottom:4,lineHeight:1.4}},hint),body));
   const kindBtn=(k,l)=>h('button',{onClick:()=>{setKind(k);setDone(null);},style:seg(kind===k)},l);
   const varBtn=(k,l)=>h('button',{onClick:()=>setVariant(k),style:seg(variant===k)},l);
-  const VHELP={v:'RECHERCHEV : la colonne de recherche doit être la première de la zone, le résultat se trouve à sa droite. Simple et rapide : c\'est le choix par défaut.',
-    h:'RECHERCHEH : comme RECHERCHEV, mais quand les en-têtes sont sur une ligne et les valeurs en dessous.',
-    im:'INDEX / EQUIV : la colonne de recherche et celle du résultat peuvent être n\'importe où, même à gauche. Résiste si l\'on ajoute une colonne.'};
+  const VHELP={v:'RECHERCHEV : on cherche une valeur dans une colonne, et on récupère l\'information située dans une colonne à sa droite. Le plus simple : c\'est le choix par défaut.',
+    h:'RECHERCHEH : comme RECHERCHEV, mais pour un tableau « couché » : la valeur cherchée est sur une ligne (ex. les mois) et l\'information récupérée est sur une ligne en dessous.',
+    im:'INDEX / EQUIV : on cherche dans une colonne et on récupère l\'information dans n\'importe quelle autre colonne, même à gauche. Résiste si l\'on ajoute une colonne.'};
   const VERB={sum:'Additionner',avg:'Faire la moyenne de',count:'Compter les lignes'};
   const numInput=(value,onChange,w)=>h('input',{type:'number',min:1,value,onChange:e=>onChange(e.target.value),style:{width:w||64,fontSize:'.76rem',padding:'2px 4px',border:'1px solid #94a3b8',borderRadius:6}});
 
@@ -3869,13 +3886,28 @@ function FormulasTab(p){
         h('button',{key:'c',style:{...BTN_N,padding:'2px 8px'},onClick:()=>loadInfo(src||undefined)},'↻ Relire les colonnes')]),
       info?h('div',{style:{fontSize:'.7rem',color:'#64748b'}},'En-têtes lus sur la ligne '+(info.headerRow+1)+' · '+info.cols.length+' colonnes. Les formules visent des colonnes entières : elles suivent l\'ajout de lignes.'):null),
 
-    kind==='lookup'?h('div',{style:box},ttl('🔎 Rechercher une valeur'),
+    kind==='lookup'?h('div',{style:box},ttl('🔎 Chercher une valeur dans un tableau'),
+      h('div',{style:{fontSize:'.72rem',color:'#475569',marginBottom:6}},'Méthode (en cas de doute, gardez la première) :'),
       h('div',{style:grid(3)},varBtn('v','RECHERCHEV'),varBtn('h','RECHERCHEH'),varBtn('im','INDEX / EQUIV')),
-      h('div',{style:{fontSize:'.72rem',color:'#334155',lineHeight:1.45,background:'#f8fafc',border:'1px solid #e2e8f0',borderRadius:6,padding:'6px 8px',marginBottom:8}},VHELP[variant]),
-      row([h('span',{key:'a'},'Chercher la valeur de la cellule'),refPicker(keyRef,setKeyRef)]),
-      variant==='h'?row([h('span',{key:'a'},'dans la ligne n°'),numInput(keyR,setKeyR),h('span',{key:'b'},'de la feuille, et renvoyer la ligne n°'),numInput(resR,setResR)]):
-        row([h('span',{key:'a'},'dans la colonne'),sel(keyC,setKeyC,colOpts),h('span',{key:'b'},'et renvoyer la colonne'),sel(resC,setResC,colOpts)]),
-      row([h('span',{key:'a'},'Si la valeur est introuvable :'),sel(nf,setNf,[{value:'dash',label:'afficher « — »'},{value:'zero',label:'afficher 0'},{value:'blank',label:'laisser vide'},{value:'na',label:'laisser #N/A'}])])):
+      h('div',{style:{fontSize:'.72rem',color:'#334155',lineHeight:1.45,background:'#f8fafc',border:'1px solid #e2e8f0',borderRadius:6,padding:'6px 8px',marginBottom:10}},VHELP[variant]),
+      step(1,variant==='h'?'Dans quelles lignes chercher ?':variant==='v'?'Dans quelles colonnes chercher ?':'Dans quelle colonne chercher ?',
+        variant==='h'?'La zone commence à la ligne où se trouve la valeur cherchée (ex. les mois) et se termine à la dernière ligne utile.':variant==='v'?'La première colonne est celle qui contient la valeur cherchée (ex. l\'adresse d\'un post). La dernière colonne est celle qui contient l\'information à récupérer, ou une colonne plus à droite.':'Choisissez la colonne qui contient la valeur cherchée (ex. l\'adresse d\'un post).',
+        variant==='h'?row([h('span',{key:'a'},'De la ligne n°'),numInput(keyR,setKeyR),h('span',{key:'b'},'à la ligne n°'),numInput(endR,(v)=>{setEndR(v);if(Number(resR)>Number(v))setResR('');})]):
+        variant==='v'?row([h('span',{key:'a'},'De la colonne'),sel(keyC,(v)=>{setKeyC(v);if(endC!=null&&endC<=v)setEndC(null);if(resC!=null&&resC<=v)setResC(null);},colOpts),h('span',{key:'b'},'à la colonne'),sel(endC,(v)=>{setEndC(v);if(resC!=null&&resC>v)setResC(null);},colOpts.filter(o=>keyC==null||o.value>keyC))]):
+        row([h('span',{key:'a'},'Dans la colonne'),sel(keyC,setKeyC,colOpts)])),
+      step(2,'Quelle valeur chercher ?','Une cellule d\'Excel (qui change selon la ligne) ou une valeur que vous tapez vous-même.',
+        h('div',null,
+          h('div',{style:{display:'flex',gap:6,marginBottom:6}},
+            h('button',{onClick:()=>setKeyMode('cell'),style:seg(keyMode==='cell')},'Une cellule d\'Excel'),
+            h('button',{onClick:()=>setKeyMode(keyMode==='num'?'num':'text'),style:seg(keyMode!=='cell')},'Une valeur que je tape')),
+          keyMode==='cell'?row([refPicker(keyRef,setKeyRef)]):
+          row([h('input',{key:'t',value:keyText,placeholder:'Texte ou nombre',onChange:e=>{const v=e.target.value;setKeyText(v);setKeyMode(v.trim()!==''&&fNum(v,false)!==null&&/^[\s0-9.,+-]+$/.test(v)?'num':'text');},style:{fontSize:'.76rem',padding:'3px 6px',border:'1px solid #94a3b8',borderRadius:6,width:180}}),
+            h('span',{key:'h',style:{fontSize:'.68rem',color:'#64748b'}},keyMode==='num'?'lu comme un nombre':'lu comme un texte')]))),
+      step(3,'Quelle information récupérer ?',variant==='h'?'Une ligne de la zone, située sous la première ligne.':variant==='v'?'Une colonne de la zone, située à droite de la colonne où l\'on cherche.':'N\'importe quelle colonne de la feuille.',
+        variant==='h'?row([h('span',{key:'a'},'Renvoyer la ligne n°'),numInput(resR,setResR)]):
+        row([h('span',{key:'a'},'Renvoyer la colonne'),sel(resC,setResC,variant==='v'?colOpts.filter(o=>keyC!=null&&o.value>keyC&&(endC==null||o.value<=endC)):colOpts)])),
+      step(4,'Que faire si la valeur n\'est pas trouvée ?','Sans réglage, Excel afficherait l\'erreur #N/A.',
+        row([h('span',{key:'a'},'Afficher :'),sel(nf,setNf,[{value:'dash',label:'un tiret « — »'},{value:'zero',label:'le nombre 0'},{value:'blank',label:'rien (cellule vide)'},{value:'na',label:'l\'erreur #N/A'}])]))):
 
     h('div',{style:box},ttl(kind==='sum'?'➕ Additionner selon des critères':kind==='avg'?'📐 Moyenne selon des critères':'🔢 Compter selon des critères'),
       kind==='count'?h('div',{style:{fontSize:'.76rem',marginBottom:6}},'Compter les lignes de la feuille '+(src||'…')+' qui remplissent tous les critères ci-dessous.'):
@@ -3898,7 +3930,7 @@ function FormulasTab(p){
     h('div',{style:{fontSize:'.7rem',color:'#64748b',marginTop:6}},'Une cellule qui contient déjà une formule n\'est jamais écrasée. Une valeur existante est remplacée, et l\'annulation la restaure.'));
 }
 
-const navBtnS=(off)=>({width:36,height:36,border:0,borderRadius:6,background:'rgba(255,255,255,.14)',color:'#fff',display:'flex',alignItems:'center',justifyContent:'center',flex:'none',cursor:off?'default':'pointer',opacity:off?.35:1});
+const navBtnS=(off)=>({width:28,height:28,border:0,borderRadius:6,background:'rgba(255,255,255,.14)',color:'#fff',display:'flex',alignItems:'center',justifyContent:'center',flex:'none',cursor:off?'default':'pointer',opacity:off?.35:1});
 function PivotVerifier(){
   const [results,setResults]=useState([]);
   const [busy,setBusy]=useState(false);
@@ -4083,18 +4115,18 @@ function PivotVerifier(){
       h('div',{style:{marginTop:10,color:'#1e40af',background:'#eff6ff',borderRadius:8,padding:'6px 9px'}},'💡 Tout se passe dans Excel : aucune donnée n’est envoyée à un serveur.'),
       h('div',{style:{textAlign:'right',marginTop:10}},h('button',{style:BTN_N,onClick:()=>setShowHelp(false)},'Fermer'))),()=>setShowHelp(false)):null,
 
-    h('div',{style:{position:'sticky',top:0,zIndex:50,background:'#f0f4f8',padding:'.5rem 0 .4rem'}},
-      h('div',{style:{display:'flex',alignItems:'center',gap:6,background:'#1e293b',color:'#fff',borderRadius:10,padding:'6px 8px'}},
+    h('div',{style:{position:'sticky',top:0,zIndex:50,background:'#f0f4f8',padding:'.2rem 0 .15rem'}},
+      h('div',{style:{display:'flex',alignItems:'center',gap:4,background:'#1e293b',color:'#fff',borderRadius:8,padding:'2px 5px'}},
         h('button',{onClick:goBack,disabled:tab==='menu','aria-label':'Retour',title:'Retour',style:navBtnS(tab==='menu')},IC.back()),
         h('button',{onClick:goHome,disabled:tab==='menu','aria-label':'Accueil',title:'Accueil',style:navBtnS(tab==='menu')},IC.home()),
-        h('div',{style:{flex:1,minWidth:0,fontSize:'.92rem',fontWeight:800,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',marginLeft:4}},TITLES[tab]),
-        (tab==='analyse'&&anaFilterOn)?h('span',{style:{background:'#dc2626',color:'#fff',fontSize:'.64rem',fontWeight:800,borderRadius:4,padding:'2px 7px',letterSpacing:'.04em',flex:'none'}},'FILTRÉ'):null,
+        h('div',{style:{flex:1,minWidth:0,fontSize:'.84rem',fontWeight:800,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',marginLeft:2}},TITLES[tab]),
+        (tab==='analyse'&&anaFilterOn)?h('span',{style:{background:'#dc2626',color:'#fff',fontSize:'.6rem',fontWeight:800,borderRadius:4,padding:'1px 6px',letterSpacing:'.04em',flex:'none'}},'FILTRÉ'):null,
         tab==='verif'?h('span',{style:{display:'flex',gap:5,flex:'none'}},
           h('button',{style:BTN_B,disabled:busy,onClick:()=>run()},'↻ Relancer'),
           h('button',{style:BTN_N,title:'Copier le rapport',onClick:copyReport,disabled:!results.length},'📋'),
           h('button',{style:BTN_N,onClick:()=>setShowHelp(true)},'❓')):null),
       (tab==='verif'||tab==='analyse'||tab==='formules')?h(LastActionBar,{onToast:setToast}):null,
-      (results.length&&tab==='verif')?h('div',{style:{display:'flex',flexWrap:'wrap',gap:5,marginTop:7,alignItems:'center'}},
+      (results.length&&tab==='verif')?h('div',{style:{display:'flex',flexWrap:'wrap',gap:5,marginTop:4,alignItems:'center'}},
         chip('🔴 '+bl.length+' bloquant'+(bl.length>1?'s':''),bl.length?'#fee2e2':'#e2e8f0',bl.length?'#b91c1c':'#64748b'),
         chip('🟠 '+vf.length+' à vérifier',vf.length?'#fef3c7':'#e2e8f0',vf.length?'#b45309':'#64748b'),
         chip('✅ '+oks.length+' OK','#dcfce7','#15803d'),
@@ -4102,9 +4134,9 @@ function PivotVerifier(){
         runAt?h('span',{style:{fontSize:'.68rem',color:'#94a3b8'}},runAt.toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'})):null,
         refreshing?h('span',{style:{fontSize:'.68rem',color:'#2563eb'}},'⏳ mise à jour…'):null,
         h('label',{style:{marginLeft:'auto',fontSize:'.7rem',color:'#475569',cursor:'pointer',whiteSpace:'nowrap'},title:'Relance l\'analyse quelques secondes après chaque modification du classeur'},h('input',{type:'checkbox',checked:auto,onChange:toggleAuto,style:{marginRight:4,verticalAlign:'middle'}}),'Relance auto')):null,
-      (tab==='analyse'&&anaFilterOn)?h('div',{style:{background:'#fef2f2',border:'1px solid #dc2626',color:'#b91c1c',borderRadius:6,padding:'5px 10px',fontSize:'.76rem',fontWeight:800,marginTop:7,lineHeight:1.4}},'FILTRÉ · '+anaBanner):null,
-      tab==='analyse'?h('div',{style:{display:'grid',gridTemplateColumns:'repeat(4,minmax(0,1fr))',gap:4,background:'#e2e8f0',borderRadius:8,padding:3,marginTop:7}},
-        [['tops','Tops'],['synth','Synthèse'],['evol','Évolution'],['more','Détails']].map(([k,l])=>h('button',{key:k,onClick:()=>setAnaSub(k),style:{border:0,borderRadius:6,padding:'7px 2px',fontSize:'.76rem',fontWeight:anaSub===k?800:600,background:anaSub===k?'#fff':'transparent',color:anaSub===k?'#1e293b':'#334155',cursor:'pointer',boxShadow:anaSub===k?'0 1px 2px rgba(0,0,0,.2)':'none'}},l))):null),
+      (tab==='analyse'&&anaFilterOn)?h('div',{style:{background:'#fef2f2',border:'1px solid #dc2626',color:'#b91c1c',borderRadius:6,padding:'2px 8px',fontSize:'.72rem',fontWeight:800,marginTop:4,lineHeight:1.35}},'FILTRÉ · '+anaBanner):null,
+      tab==='analyse'?h('div',{style:{display:'grid',gridTemplateColumns:'repeat(4,minmax(0,1fr))',gap:4,background:'#e2e8f0',borderRadius:8,padding:2,marginTop:4}},
+        [['tops','Tops'],['synth','Synthèse'],['evol','Évolution'],['more','Détails']].map(([k,l])=>h('button',{key:k,onClick:()=>setAnaSub(k),style:{border:0,borderRadius:6,padding:'4px 2px',fontSize:'.74rem',fontWeight:anaSub===k?800:600,background:anaSub===k?'#fff':'transparent',color:anaSub===k?'#1e293b':'#334155',cursor:'pointer',boxShadow:anaSub===k?'0 1px 2px rgba(0,0,0,.2)':'none'}},l))):null),
 
     err?h('div',{style:{background:'#fef2f2',border:'1px solid #fca5a5',color:'#b91c1c',borderRadius:8,padding:'.5rem .7rem',fontSize:'.8rem',marginBottom:8}},'⚠️ '+err):null,
     toast?h('div',{onClick:()=>setToast(''),style:{background:'#eff6ff',border:'1px solid #bfdbfe',color:'#1e40af',borderRadius:8,padding:'.45rem .7rem',fontSize:'.78rem',marginBottom:8,cursor:'pointer'}},toast):null,
