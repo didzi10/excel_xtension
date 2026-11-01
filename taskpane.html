@@ -986,7 +986,7 @@ function AnalyseTab(p){
   const bi=brand?tops.brandCols.indexOf(brand):-1,on=bi>=0;
   const plOn=!!pl&&tops.items.some(x=>x.p===pl);
   const itemsP0=plOn?tops.items.filter(x=>x.p===pl):tops.items;
-  const itemsP=useMemo(()=>cRT?itemsP0.map(x=>x.xn?Object.assign({},x,{w:1+x.xn}):x):itemsP0,[itemsP0,cRT]);
+  const itemsP=cRT?itemsP0.map(x=>x.xn?Object.assign({},x,{w:1+x.xn}):x):itemsP0;
   const baseAll=on?tops.items.filter(x=>x.b.includes(bi)):tops.items;
   const base=on?itemsP.filter(x=>x.b.includes(bi)):itemsP;
   const gAll=grpBy(tops.items,x=>[x.p]);
