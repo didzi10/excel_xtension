@@ -15,7 +15,7 @@
   <div id="root"></div>
   <script>
 
-const { useState, useEffect, useRef } = React;
+const { useState, useEffect, useRef, useMemo } = React;
 
 const CONFIG={
   webMin:2500,          // visibilité minimale d'un site web
@@ -776,8 +776,161 @@ function MonthChart(p){
   return h('svg',{viewBox:'0 0 '+W+' '+H,width:'100%',style:{display:'block'}},els);
 }
 
+/* ═════════ Préférences locales (réglages seulement, jamais de fichiers ni de données) ═════════ */
+const prefGet=(k,d)=>{try{const v=window.localStorage.getItem('tmf_'+k);return v===null?d:JSON.parse(v);}catch(e){return d;}};
+const prefSet=(k,v)=>{try{window.localStorage.setItem('tmf_'+k,JSON.stringify(v));}catch(e){}};
+const PLN={facebook:'Facebook',instagram:'Instagram',twitter:'Twitter/X',x:'Twitter/X',youtube:'YouTube',linkedin:'LinkedIn',twitch:'Twitch',tiktok:'TikTok',story:'Story',websites:'Websites',strava:'Strava',snapchat:'Snapchat'};
+const plName=(p)=>PLN[p]||(p?String(p).charAt(0).toUpperCase()+String(p).slice(1):'—');
+const TITLES={menu:'Outils pivot',formules:'Formules',outils:'Outils',maj:'Mise à jour',analyse:'Analyse',verif:'Vérifications'};
+const svgI=(size,kids,color)=>h('svg',{width:size,height:size,viewBox:'0 0 24 24',fill:'none',stroke:color||'currentColor',strokeWidth:2.2,strokeLinecap:'round',strokeLinejoin:'round','aria-hidden':'true'},kids);
+const IC={
+  back:()=>svgI(20,h('path',{d:'M15 5l-7 7 7 7'})),
+  home:()=>svgI(20,h('path',{d:'M4 11l8-7 8 7M6 10v10h12V10'})),
+  fx:()=>svgI(26,h('path',{d:'M9 4c-2 0-3 1-3 3v10c0 2-1 3-3 3M9 12h6M15 8l4 8M19 8l-4 8'}),'#2563eb'),
+  tools:()=>svgI(26,[h('path',{key:1,d:'M4 7h16M4 12h16M4 17h16'}),h('circle',{key:2,cx:9,cy:7,r:2,fill:'#fff'}),h('circle',{key:3,cx:15,cy:12,r:2,fill:'#fff'}),h('circle',{key:4,cx:8,cy:17,r:2,fill:'#fff'})],'#2563eb'),
+  sync:()=>svgI(26,h('path',{d:'M20 12a8 8 0 1 1-2.3-5.7M20 4v4h-4'}),'#2563eb'),
+  chart:()=>svgI(26,h('path',{d:'M5 20V10M12 20V4M19 20v-7'}),'#2563eb'),
+  check:()=>svgI(26,h('path',{d:'M5 12l4 4 10-10'}),'#2563eb')
+};
+function MenuHome(p){
+  const {go,onPrefReset}=p;
+  const last=prefGet('lastTab','');
+  const lastHint={maj:'Les fichiers sont à recharger.',analyse:'Mêmes période et filtres.',formules:'Dernier écran utilisé.',outils:'Dernier écran utilisé.',verif:'Dernier écran utilisé.'}[last];
+  const tiles=[['formules','Formules','Chercher, somme, moyenne, compter',IC.fx],['outils','Outils','URL, usernames, doublons…',IC.tools],['maj','Mise à jour','Exports Apify, Emplifi, Data Studio',IC.sync],['analyse','Analyse','Tops, synthèse, évolution',IC.chart],['verif','Vérifications','Contrôler DATA, TABLEAUX, INDEX',IC.check]];
+  return h('div',{style:{display:'flex',flexDirection:'column',gap:12,paddingTop:4}},
+    (last&&TITLES[last]&&last!=='menu')?h('button',{onClick:()=>go(last),style:{textAlign:'left',background:'#dbeafe',border:'1px solid #60a5fa',borderRadius:10,padding:'10px 12px',color:'#1e3a8a',cursor:'pointer',fontFamily:'inherit'}},
+      h('span',{style:{display:'block',fontSize:'.66rem',fontWeight:800,letterSpacing:'.06em',textTransform:'uppercase'}},'Reprendre'),
+      h('span',{style:{display:'block',fontSize:'.86rem',fontWeight:700,marginTop:2}},TITLES[last]),
+      h('span',{style:{display:'block',fontSize:'.74rem',marginTop:2}},lastHint)):null,
+    h('div',{style:{display:'grid',gridTemplateColumns:'repeat(2,minmax(0,1fr))',gap:10}},
+      tiles.map(([k,t,d,ic])=>h('button',{key:k,onClick:()=>go(k),style:{textAlign:'left',background:'#fff',border:'1px solid #cbd5e1',borderRadius:10,padding:'12px',display:'flex',flexDirection:'column',gap:6,color:'#1e293b',cursor:'pointer',fontFamily:'inherit'}},
+        ic(),
+        h('span',{style:{fontSize:'.9rem',fontWeight:800}},t),
+        h('span',{style:{fontSize:'.74rem',color:'#475569',lineHeight:1.35}},d)))),
+    h('div',{style:{fontSize:'.7rem',color:'#64748b',lineHeight:1.45}},'« Reprendre » rouvre le dernier écran avec ses réglages (période, filtres…). Les fichiers chargés ne sont jamais conservés.'));
+}
+
+/* ═════════ Formules guidées : génération + évaluation (fonctions pures) ═════════ */
+const FR_FN={VLOOKUP:'RECHERCHEV',HLOOKUP:'RECHERCHEH',INDEX:'INDEX',MATCH:'EQUIV',IFERROR:'SIERREUR',SUMIFS:'SOMME.SI.ENS',AVERAGEIFS:'MOYENNE.SI.ENS',COUNTIFS:'NB.SI.ENS'};
+const F_OPS=[{value:'=',label:'est égal à'},{value:'<>',label:'est différent de'},{value:'has',label:'contient'},{value:'>',label:'est supérieur à'},{value:'>=',label:'est supérieur ou égal à'},{value:'<',label:'est inférieur à'},{value:'<=',label:'est inférieur ou égal à'}];
+const qSheet=(n)=>/^[A-Za-zÀ-ÿ_][A-Za-zÀ-ÿ0-9_]*$/.test(n)&&!/^[A-Za-z]{1,3}[0-9]+$/.test(n)&&!/^[RrCc]$/.test(n)?n:"'"+String(n).replace(/'/g,"''")+"'";
+/* référence à une cellule : rf={sheet,r,c,fixR,fixC} (indices 0-based), décalée de (dr,dc) si non figée */
+function fRef(rf,dr,dc,here){
+  const r=rf.fixR?rf.r:rf.r+dr,c=rf.fixC?rf.c:rf.c+dc;
+  if(r<0||c<0)throw new Error('La formule recopiée sortirait de la feuille (ligne ou colonne négative). Figez la ligne ou la colonne de la cellule de référence.');
+  return (rf.sheet!==here?qSheet(rf.sheet)+'!':'')+(rf.fixC?'$':'')+colL(c)+(rf.fixR?'$':'')+(r+1);
+}
+const fNum=(txt,fr)=>{const n=Number(String(txt).trim().replace(',','.'));return isFinite(n)&&String(txt).trim()!==''?(fr?String(n).replace('.',','):String(n)):null;};
+/* spec : {kind:'lookup'|'sum'|'avg'|'count', variant:'v'|'h'|'im', src, keyC,resC,keyR,resR, nf, keyRef, valC, crits:[{c,op,vt,ref,text}]} */
+function specError(s){
+  if(!s.src)return 'Choisissez la feuille des données.';
+  if(s.kind==='lookup'){
+    if(!s.keyRef)return 'Cliquez sur « Prendre la cellule sélectionnée » pour indiquer la valeur à chercher.';
+    if(s.variant==='h'){if(!(s.keyR>0)||!(s.resR>0))return 'Indiquez le numéro de la ligne où chercher et celui de la ligne à renvoyer.';if(s.resR<s.keyR)return 'La ligne à renvoyer doit être sous la ligne où l\'on cherche (ou la même).';}
+    else{if(s.keyC==null)return 'Choisissez la colonne où chercher.';if(s.resC==null)return 'Choisissez la colonne à renvoyer.';
+      if(s.variant==='v'&&s.resC<s.keyC)return 'RECHERCHEV ne peut pas renvoyer une colonne située à gauche de la colonne de recherche : choisissez INDEX / EQUIV.';}
+    return null;
+  }
+  if(s.kind!=='count'&&s.valC==null)return s.kind==='sum'?'Choisissez la colonne à additionner.':'Choisissez la colonne dont faire la moyenne.';
+  if(!s.crits.length)return 'Ajoutez au moins un critère.';
+  for(let i=0;i<s.crits.length;i++){const c=s.crits[i];
+    if(c.c==null)return 'Critère '+(i+1)+' : choisissez la colonne à tester.';
+    if(c.vt==='cell'&&!c.ref)return 'Critère '+(i+1)+' : cliquez sur « Prendre la cellule sélectionnée ».';
+    if((c.vt==='text'||c.vt==='num')&&String(c.text).trim()==='')return 'Critère '+(i+1)+' : saisissez la valeur.';
+    if(c.vt==='num'&&fNum(c.text,false)===null)return 'Critère '+(i+1)+' : « '+c.text+' » n\'est pas un nombre.';
+    if(c.vt==='num'&&c.op==='has')return 'Critère '+(i+1)+' : « contient » s\'utilise avec un texte.';
+  }
+  return null;
+}
+function buildFormula(s,dr,dc,here,fr){
+  const e=specError(s);if(e)throw new Error(e);
+  const S=(n)=>fr?(FR_FN[n]||n):n,sep=fr?';':',',sh=qSheet(s.src)+'!';
+  const colRng=(a)=>sh+'$'+colL(a)+':$'+colL(a);
+  let core;
+  if(s.kind==='lookup'){
+    const key=fRef(s.keyRef,dr,dc,here);
+    if(s.variant==='v')core=S('VLOOKUP')+'('+[key,sh+'$'+colL(s.keyC)+':$'+colL(s.resC),String(s.resC-s.keyC+1),fr?'FAUX':'FALSE'].join(sep)+')';
+    else if(s.variant==='h')core=S('HLOOKUP')+'('+[key,sh+'$'+s.keyR+':$'+s.resR,String(s.resR-s.keyR+1),fr?'FAUX':'FALSE'].join(sep)+')';
+    else core=S('INDEX')+'('+colRng(s.resC)+sep+S('MATCH')+'('+key+sep+colRng(s.keyC)+sep+'0))';
+    if(s.nf==='dash')core=S('IFERROR')+'('+core+sep+'"—")';
+    else if(s.nf==='zero')core=S('IFERROR')+'('+core+sep+'0)';
+    else if(s.nf==='blank')core=S('IFERROR')+'('+core+sep+'"")';
+    return '='+core;
+  }
+  const fn=s.kind==='sum'?'SUMIFS':s.kind==='avg'?'AVERAGEIFS':'COUNTIFS';
+  const args=[];
+  if(s.kind!=='count')args.push(colRng(s.valC));
+  for(const c of s.crits){
+    args.push(colRng(c.c));
+    let a;
+    if(c.vt==='cell'){const x=fRef(c.ref,dr,dc,here);a=c.op==='='?x:c.op==='has'?'"*"&'+x+'&"*"':'"'+c.op+'"&'+x;}
+    else if(c.vt==='num'){const n=fNum(c.text,fr);a=c.op==='='?n:'"'+c.op+'"&'+n;}
+    else{const t=String(c.text);const lit=c.op==='='?t:c.op==='has'?'*'+t+'*':c.op+t;a='"'+lit.replace(/"/g,'""')+'"';}
+    args.push(a);
+  }
+  return '='+S(fn)+'('+args.join(sep)+')';
+}
+/* ─── évaluation (aperçu) : reproduit le comportement d'Excel ─── */
+const numOf=(v)=>typeof v==='number'?v:(typeof v==='string'&&v.trim()!==''&&isFinite(Number(v.replace(',','.')))?Number(v.replace(',','.')):null);
+function critMatch(op,ref){
+  const refEmpty=(ref===''||ref===null||ref===undefined);
+  const rn=refEmpty?0:numOf(ref),rs=refEmpty?'':String(ref).toLowerCase();
+  return (v)=>{
+    const vs=(v===null||v===undefined)?'':String(v).toLowerCase(),vn=typeof v==='number'?v:null;
+    if(op==='has')return rs!==''&&vs.indexOf(rs)>=0;
+    if(op==='='||op==='<>'){
+      let eq;
+      if(rn!==null)eq=(vn!==null&&vn===rn)||(typeof v==='string'&&numOf(v)!==null&&numOf(v)===rn&&v.trim()!=='');
+      else eq=vs===rs;
+      return op==='='?eq:!eq;
+    }
+    if(rn!==null){if(vn===null)return false;return op==='>'?vn>rn:op==='>='?vn>=rn:op==='<'?vn<rn:vn<=rn;}
+    if(typeof v!=='string')return false;
+    const c=vs.localeCompare(rs,'fr');return op==='>'?c>0:op==='>='?c>=0:op==='<'?c<0:c<=0;
+  };
+}
+const sameKey=(a,b)=>typeof a===typeof b&&(typeof a==='string'?a.toLowerCase()===b.toLowerCase():a===b);
+const looseKey=(a,b)=>String(a===null||a===undefined?'':a).trim().toLowerCase()===String(b===null||b===undefined?'':b).trim().toLowerCase();
+/* d : {keyVal, colV:{c:[valeurs]}, rowV:{r:[valeurs]}, critVals:[...]} → {value,n,notes:[],warns:[]} */
+function evalSpec(s,d){
+  const notes=[],warns=[];
+  if(s.kind==='lookup'){
+    const kv=d.keyVal;
+    if(kv===''||kv===null||kv===undefined)return {value:null,n:0,notes,warns:['La cellule de recherche est vide.']};
+    let ks,rs;
+    if(s.variant==='h'){ks=d.rowV[s.keyR];rs=d.rowV[s.resR];}else{ks=d.colV[s.keyC];rs=d.colV[s.resC];}
+    const hits=[];for(let i=0;i<ks.length;i++)if(sameKey(ks[i],kv))hits.push(i);
+    if(!hits.length){
+      let near=-1;for(let i=0;i<ks.length;i++)if(looseKey(ks[i],kv)){near=i;break;}
+      const w=['Aucune correspondance exacte : Excel afficherait #N/A'+(s.nf==='dash'?' (remplacé par « — »)':s.nf==='zero'?' (remplacé par 0)':s.nf==='blank'?' (remplacé par une cellule vide)':'')+'.'];
+      if(near>=0)w.push('Une valeur très proche existe ('+(typeof ks[near]!==typeof kv?'type différent : texte et nombre':'espace en trop ou casse différente')+') : nettoyez les clés avec l\'outil Outils.');
+      return {value:null,n:0,notes,warns:w,miss:true};
+    }
+    if(hits.length>1)warns.push(hits.length+' lignes ont cette clé : seule la première est utilisée.');
+    notes.push('1 correspondance'+(hits.length>1?' (la première sur '+hits.length+')':'')+' trouvée.');
+    return {value:rs[hits[0]],n:hits.length,notes,warns};
+  }
+  const len=d.colV[s.crits[0].c].length;
+  const tests=s.crits.map((c,i)=>critMatch(c.op,d.critVals[i]));
+  s.crits.forEach((c,i)=>{if(c.vt==='cell'&&(d.critVals[i]===''||d.critVals[i]===null||d.critVals[i]===undefined))warns.push('Critère '+(i+1)+' : la cellule de référence est vide (Excel la lit comme 0).');});
+  let n=0,sum=0,cnt=0,txt=0;
+  for(let r=0;r<len;r++){
+    let ok=true;
+    for(let i=0;i<tests.length;i++){if(!tests[i](d.colV[s.crits[i].c][r])){ok=false;break;}}
+    if(!ok)continue;n++;
+    if(s.kind!=='count'){const v=d.colV[s.valC][r];if(typeof v==='number'){sum+=v;cnt++;}else if(v!==''&&v!==null&&v!==undefined)txt++;}
+  }
+  if(txt)warns.push(txt+' valeur'+(txt>1?'s':'')+' texte ignorée'+(txt>1?'s':'')+' dans la colonne à '+(s.kind==='sum'?'additionner':'moyenner')+' (nombre stocké en texte ?).');
+  notes.push(n+' ligne'+(n>1?'s':'')+' correspond'+(n>1?'ent':'')+' aux critères.');
+  if(s.kind==='count')return {value:n,n,notes,warns};
+  if(s.kind==='sum')return {value:sum,n,notes,warns};
+  if(!cnt){warns.push('Aucune valeur numérique à moyenner : Excel afficherait #DIV/0!.');return {value:null,n,notes,warns,miss:true};}
+  return {value:sum/cnt,n,notes,warns};
+}
+const fmtFV=(v)=>{if(v===null||v===undefined)return '—';if(v==='')return '(vide)';if(typeof v==='number')return (Math.abs(v)>=1000||Number.isInteger(v)?Math.round(v*10000)/10000:Math.round(v*10000)/10000).toLocaleString('fr-FR',{maximumFractionDigits:4}).replace(/[  ]/g,' ');return String(v);};
+
 function AnalyseTab(p){
-  const {tops,brand,onBrand,onToast}=p;
+  const {tops,brand,onBrand,onToast,pl,onPl,sub}=p;
   const [mode,setMode]=useState('col');
   const [col,setCol]=useState('');
   const [va,setVa]=useState('');
@@ -791,22 +944,40 @@ function AnalyseTab(p){
   const [dim,setDim]=useState('p');
   const [gmet,setGmet]=useState('vis');
   const [stack,setStack]=useState(false);
+  const [scopeT,setScopeT]=useState('x');
+  const [metT,setMetT]=useState('v');
+  const [plT,setPlT]=useState('');
+  const [editP,setEditP]=useState(false);
+  const [anaOpen,setAnaOpen]=useState(new Set());
   const inited=useRef(false);
+  useEffect(()=>{if(inited.current)prefSet('ana',{mode,col,va,vb,da1,da2,db1,db2,metric});},[mode,col,va,vb,da1,da2,db1,db2,metric]);
   useEffect(()=>{
     if(!tops||inited.current)return;inited.current=true;
     const names=tops.cats.map(c=>c.name);const sc=names.find(n=>n.toLowerCase()==='scope');const ini=sc||names[0]||'';
     setCol(ini);const cat=tops.cats.find(c=>c.name===ini);
     if(sc&&cat&&tops.b2&&cat.values.indexOf(tops.b2)>=0)setVa(tops.b2);
+    const sv=prefGet('ana',null);
+    if(sv){
+      if(sv.mode==='date'){setMode('date');setDa1(sv.da1||'');setDa2(sv.da2||'');setDb1(sv.db1||'');setDb2(sv.db2||'');}
+      else{const c2=tops.cats.find(c=>c.name===sv.col);if(c2){setCol(sv.col);setVa(c2.values.indexOf(sv.va)>=0?sv.va:'');setVb(c2.values.indexOf(sv.vb)>=0?sv.vb:'');}}
+      if(['vis','eng','n','eq'].indexOf(sv.metric)>=0&&(sv.metric!=='eq'||tops.hasEq))setMetric(sv.metric);
+    }
   },[tops]);
 
   if(!tops||!tops.items.length)return h('div',{style:{background:'#fff',borderRadius:10,padding:'1rem',fontSize:'.82rem',color:'#475569'}},"L'analyse a besoin de l'onglet DATA et de la colonne « plateforme ».");
 
   const bi=brand?tops.brandCols.indexOf(brand):-1,on=bi>=0;
-  const base=on?tops.items.filter(x=>x.b.includes(bi)):tops.items;
+  const plOn=!!pl&&tops.items.some(x=>x.p===pl);
+  const itemsP=plOn?tops.items.filter(x=>x.p===pl):tops.items;
+  const baseAll=on?tops.items.filter(x=>x.b.includes(bi)):tops.items;
+  const base=on?itemsP.filter(x=>x.b.includes(bi)):itemsP;
+  const gAll=grpBy(tops.items,x=>[x.p]);
+  const plAll=Object.keys(gAll).sort((a,b)=>gAll[b].vis-gAll[a].vis||gAll[b].n-gAll[a].n);
   const cat=tops.cats.find(c=>c.name===col),ci=cat?tops.cats.indexOf(cat):-1;
   const sortVals=(vals)=>[...vals].sort((a,b)=>String(a).localeCompare(String(b),'fr',{numeric:true}));
   const mkSel=(val,f,t)=>mode==='col'?((cat&&val!=='')?{type:'col',code:cat.values.indexOf(val)}:null):((f||t)?{type:'date',from:isoToSerial(f),to:isoToSerial(t)}:null);
-  const pick=(s)=>!s?base:s.type==='col'?(s.code<0?[]:base.filter(x=>x.c[ci]===s.code)):base.filter(x=>x.d!==null&&(s.from===null||x.d>=s.from)&&(s.to===null||x.d<s.to+1));
+  const pickIn=(arr,s)=>!s?arr:s.type==='col'?(s.code<0?[]:arr.filter(x=>x.c[ci]===s.code)):arr.filter(x=>x.d!==null&&(s.from===null||x.d>=s.from)&&(s.to===null||x.d<s.to+1));
+  const pick=(s)=>pickIn(base,s);
   const selA=mkSel(va,da1,da2),selB=mkSel(vb,db1,db2);
   const rowsA=pick(selA),rowsB=selB?pick(selB):null;
   const A=agg(rowsA),B=rowsB?agg(rowsB):null;
@@ -857,8 +1028,8 @@ function AnalyseTab(p){
       h('div',null,'1er post : '+fP(c.s1,0)+' % · 5 premiers : '+fP(c.s5,0)+' % · 10 premiers : '+fP(c.s10,0)+' %'),
       h('div',null,'La moitié du total vient de '+c.k50+' post'+(c.k50>1?'s':'')+' ('+fP(c.k50pct,0)+' % des posts concernés).')):null;
 
-  const allA=selA?(selA.type==='col'?(selA.code<0?[]:tops.items.filter(x=>x.c[ci]===selA.code)):tops.items.filter(x=>x.d!==null&&(selA.from===null||x.d>=selA.from)&&(selA.to===null||x.d<selA.to+1))):tops.items;
-  const allB=selB?(selB.type==='col'?(selB.code<0?[]:tops.items.filter(x=>x.c[ci]===selB.code)):tops.items.filter(x=>x.d!==null&&(selB.from===null||x.d>=selB.from)&&(selB.to===null||x.d<selB.to+1))):null;
+  const allA=selA?(selA.type==='col'?(selA.code<0?[]:itemsP.filter(x=>x.c[ci]===selA.code)):itemsP.filter(x=>x.d!==null&&(selA.from===null||x.d>=selA.from)&&(selA.to===null||x.d<selA.to+1))):itemsP;
+  const allB=selB?(selB.type==='col'?(selB.code<0?[]:itemsP.filter(x=>x.c[ci]===selB.code)):itemsP.filter(x=>x.d!==null&&(selB.from===null||x.d>=selB.from)&&(selB.to===null||x.d<selB.to+1))):null;
   const tKp=tKpi(A,B,labA,labB,tops),tPl=tSplit('Par plateforme',A.byP,B&&B.byP,A,B),tTy=tSplit('Par type (owned / paid / earned)',A.byO,B&&B.byO,A,B);
   const tG=tGap(rowsA,rowsB,tops.brandDetected,dim,gmet),tBr=tBrands(allA,allB,tops.brandDetected);
   const tMu=mode==='col'?tMulti(base,cat,ci,tops.hasDep,sortVals):null;
@@ -870,9 +1041,18 @@ function AnalyseTab(p){
     }catch(e){onToast('Export impossible : '+(e&&e.message?e.message:e));}
   };
   const dimOpts=[{value:'p',label:'Plateforme'},{value:'o',label:'Type (owned/paid/earned)'}].concat(tops.brandDetected.length?[{value:'b',label:'Marque'}]:[]);
-  return h('div',null,
-    h('div',{style:box},ttl('📅 Que voulez-vous analyser ?'),
-      h('div',{style:{fontSize:'.72rem',color:'#64748b',marginBottom:8,lineHeight:1.5}},'Choisissez la période (colonne ou dates), puis une période de comparaison si besoin. La marque, plus bas, restreint l\'analyse à une seule marque.'),
+  const flipA=(k)=>setAnaOpen(prev=>{const s=new Set(prev);s.has(k)?s.delete(k):s.add(k);return s;});
+  const plOpts=[{value:'',label:'Toutes les plateformes'}].concat(plAll.map(k=>({value:k,label:plName(k)})));
+  const pctTxt=(x)=>x>0&&x<0.05?'<0,1 %':fP(x,1)+' %';
+
+  /* ── en-tête : période, filtres, export ── */
+  const periodBox=h('div',{style:box},
+    h('div',{style:{display:'flex',alignItems:'center',gap:6}},
+      h('div',{style:{flex:1,minWidth:0,fontSize:'.76rem',color:'#334155',lineHeight:1.45}},'Période : ',h('strong',null,labA),hasB?[' · comparée à ',h('strong',{key:'b'},labB)]:' · sans comparaison',' — '+fI(A.n)+' posts'+(hasB?' / '+fI(B.n):'')),
+      h('button',{style:BTN_N,onClick:()=>setEditP(!editP)},editP?'Fermer':'Modifier'),
+      h('button',{style:BTN_B,onClick:doExport,title:'Crée une nouvelle feuille avec tous les tableaux de cet onglet'},'📤')),
+    editP?h('div',{style:{marginTop:8,borderTop:'1px solid #e2e8f0',paddingTop:8}},
+      h('div',{style:{fontSize:'.72rem',color:'#64748b',marginBottom:8,lineHeight:1.5}},'Choisissez la période (colonne ou dates), puis une période de comparaison si besoin. Les filtres plateforme et marque s\'appliquent à tout l\'onglet.'),
       h('div',{style:{display:'flex',gap:6,marginBottom:8}},modeBtn('col','Par colonne'),modeBtn('date','Par dates')),
       mode==='col'?h('div',null,
           row('Colonne',sel(col,(v)=>{setCol(v);setVa('');setVb('');},colOpts)),
@@ -882,87 +1062,145 @@ function AnalyseTab(p){
           !tops.hasDate?h('div',{style:{color:'#b91c1c',fontSize:'.75rem'}},'Colonne « Date » introuvable.'):null,
           row('Période',h('span',null,h('input',{type:'date',value:da1,onChange:e=>setDa1(e.target.value),style:{fontSize:'.73rem'}}),' → ',h('input',{type:'date',value:da2,onChange:e=>setDa2(e.target.value),style:{fontSize:'.73rem'}}))),
           row('Comparer à',h('span',null,h('input',{type:'date',value:db1,onChange:e=>setDb1(e.target.value),style:{fontSize:'.73rem'}}),' → ',h('input',{type:'date',value:db2,onChange:e=>setDb2(e.target.value),style:{fontSize:'.73rem'}})))),
-      h(BrandSelect,{cols:tops.brandCols,detected:tops.brandDetected,value:brand,onChange:onBrand}),
-      on?h('div',{style:{background:'#fef2f2',border:'1px solid #fca5a5',color:'#b91c1c',borderRadius:6,padding:'4px 8px',fontSize:'.74rem',fontWeight:700,marginTop:4}},'⚠️ Analyse filtrée sur la marque « '+brand+' »'):null,
-      h('div',{style:{fontSize:'.72rem',color:'#64748b',marginTop:6}},'Période affichée : ',h('strong',null,labA),hasB?[' · comparée à ',h('strong',{key:'b'},labB)]:' · sans comparaison',' — '+fI(A.n)+' posts'+(hasB?' / '+fI(B.n):''))),
+      row('Plateforme',sel(plOn?pl:'',(v)=>onPl&&onPl(v),plOpts)),
+      h(BrandSelect,{cols:tops.brandCols,detected:tops.brandDetected,value:brand,onChange:onBrand})):null);
 
-    h('div',{style:{display:'flex',gap:8,alignItems:'flex-start',marginBottom:0}},h(Reliab,{rows:rowsA}),
-      h('button',{style:{...BTN_B,marginBottom:10,whiteSpace:'nowrap'},onClick:doExport,title:'Crée une nouvelle feuille avec tous les tableaux de cet onglet'},'📤 Exporter')),
-    h('div',{style:{...box,background:'#eff6ff',borderColor:'#bfdbfe'}},
-      h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center'}},ttl('💡 Points à retenir'),h('button',{style:BTN_N,onClick:()=>copyText(insights.map(s=>'• '+s).join('\n'),(ok)=>onToast(ok?'Points à retenir copiés.':'Copie impossible depuis ce volet.'))},'📋 Copier')),
-      h('ul',{style:{margin:0,paddingLeft:'1.1rem',fontSize:'.78rem',lineHeight:1.6,color:'#1e293b'}},insights.map((s,i)=>h('li',{key:i},s))),
-      h('div',{style:{fontSize:'.68rem',color:'#64748b',marginTop:6}},'Constats chiffrés calculés depuis DATA, sans interprétation.')),
+  const cardBox={background:'#fff',border:'1px solid #cbd5e1',borderRadius:8,padding:'8px 10px',marginBottom:6};
+  const segB=(on)=>({flex:1,padding:'7px 4px',fontSize:'.76rem',fontWeight:700,cursor:'pointer',border:'1px solid '+(on?'#1e293b':'#94a3b8'),background:on?'#1e293b':'#fff',color:on?'#fff':'#1e293b',borderRadius:6});
 
-    h('div',{style:box},ttl('📊 Synthèse'),
-      h('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:6,marginBottom:10}},
+  /* ── Tops ── */
+  const topsView=(()=>{
+    const isEng=metT==='e';
+    const valOf=(x)=>isEng?x.eng:x.vis;
+    const pool=rowsA.filter(x=>valOf(x)!==null&&valOf(x)!==undefined&&!(isEng&&(x.p==='websites'||x.p==='story')));
+    const cnt={};pool.forEach(x=>{cnt[x.p]=(cnt[x.p]||0)+1;});
+    const platsPool=Object.keys(cnt).sort((a,b)=>cnt[b]-cnt[a]);
+    let L,head,platPick=null,note=null;
+    if(scopeT==='x'){
+      L=pool.slice().sort((a,b)=>valOf(b)-valOf(a)).slice(0,100);head='Top 100 · '+(plOn?plName(pl):'toutes plateformes');
+    }else{
+      const cur=plOn?pl:(plT&&cnt[plT]?plT:(platsPool[0]||''));
+      L=pool.filter(x=>x.p===cur).sort((a,b)=>valOf(b)-valOf(a)).slice(0,TOPN);head='Top '+TOPN+' · '+(cur?plName(cur):'—');
+      platPick=plOn?h('div',{style:{fontSize:'.72rem',color:'#b91c1c',fontWeight:700}},'Plateforme fixée par le filtre « '+plName(pl)+' » (en haut de l\'écran).')
+        :h('div',{style:{display:'flex',alignItems:'center',gap:6,fontSize:'.76rem'}},h('span',{style:{color:'#64748b'}},'Plateforme'),h(Picker,{value:cur,onChange:setPlT,options:platsPool.map(k=>({value:k,label:plName(k)+' ('+fI(cnt[k])+')'}))}));
+      if(isEng&&plOn&&(pl==='story'||pl==='websites'))note='Story et Websites sont exclus du Top engagement.';
+    }
+    head+=(on?' · '+brand:'')+' · par '+(isEng?'engagement':'visibilité');
+    const mx=L.length?Math.max(...L.map(valOf)):1;
+    return h('div',null,
+      h('div',{style:{display:'flex',gap:6,marginBottom:6}},
+        h('button',{style:segB(scopeT==='x'),onClick:()=>setScopeT('x')},'Top 100 toutes plateformes'),
+        h('button',{style:segB(scopeT==='p'),onClick:()=>setScopeT('p')},'Top '+TOPN+' par plateforme')),
+      h('div',{style:{display:'flex',gap:6,marginBottom:8}},
+        h('button',{style:segB(metT==='v'),onClick:()=>setMetT('v')},'Visibilité'),
+        h('button',{style:segB(metT==='e'),onClick:()=>setMetT('e')},'Engagement')),
+      platPick?h('div',{style:{marginBottom:8}},platPick):null,
+      h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',gap:6,marginBottom:6}},
+        h('span',{style:{fontSize:'.76rem',fontWeight:700,color:'#334155'}},head),
+        L.length?urlBtn(L,onToast):null),
+      isEng?h('div',{style:{fontSize:'.68rem',color:'#64748b',marginBottom:6}},'Engagement = '+(tops.hasSOA?'colonne Social Actions':'likes + commentaires, faute de colonne Social Actions')+', hors websites et stories.'):null,
+      note?h('div',{style:{fontSize:'.72rem',color:'#92400e',marginBottom:6}},note):null,
+      !L.length?h('div',{style:{color:'#64748b',fontSize:'.78rem'}},'Aucun post pour cette sélection.'):
+      L.map((x,i)=>{
+        const v=valOf(x),u=safeUrl(x.url),acc=x.acc||x.idp||'—';
+        return h('div',{key:i,style:cardBox},
+          h('div',{style:{display:'flex',alignItems:'baseline',gap:8}},
+            h('span',{style:{fontSize:'.74rem',fontWeight:700,color:'#475569',width:28,flex:'none'}},i+1),
+            h('span',{title:acc,style:{fontSize:'.8rem',fontWeight:600,flex:1,minWidth:0,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},acc),
+            h('span',{style:{fontSize:'.86rem',fontWeight:800,flex:'none'}},v!==null&&v!==undefined?v.toLocaleString('fr-FR'):'—')),
+          h('div',{style:{display:'flex',alignItems:'center',gap:8,marginTop:6,paddingLeft:36,flexWrap:'wrap'}},
+            h('span',{style:{fontSize:'.68rem',fontWeight:700,background:'#e2e8f0',color:'#1e293b',borderRadius:4,padding:'1px 6px',flex:'none'}},plName(x.p)),
+            h('span',{style:{flex:1,minWidth:40,height:6,background:'#e2e8f0',borderRadius:3,overflow:'hidden'}},h('span',{style:{display:'block',height:'100%',background:isEng?'#7e22ce':'#2563eb',width:Math.max(3,Math.round((v||0)/(mx||1)*100))+'%'}})),
+            u?h('a',{href:u,target:'_blank',rel:'noreferrer',style:{flex:'none',background:'#2563eb',color:'#fff',textDecoration:'none',borderRadius:6,padding:'4px 10px',fontSize:'.72rem',fontWeight:700}},'Ouvrir le post ↗'):h('span',{style:{flex:'none',fontSize:'.7rem',color:'#94a3b8'}},'pas d\'URL'),
+            h('a',{className:'rl','data-sec':'DATA','data-row':x.er,style:{flex:'none',fontSize:'.72rem'}},'ligne '+x.er)));
+      }));
+  })();
+
+  /* ── Synthèse : indicateurs + parts de TOUTES les plateformes ── */
+  const rowsNP=pickIn(baseAll,selA),rowsNPB=selB?pickIn(baseAll,selB):null;
+  const gA=grpBy(rowsNP,x=>[x.p]),gB=rowsNPB?grpBy(rowsNPB,x=>[x.p]):null;
+  const shareBlock=(title,key)=>{
+    const tot=plAll.reduce((s,k)=>s+((gA[k]||{})[key]||0),0),totB=gB?plAll.reduce((s,k)=>s+((gB[k]||{})[key]||0),0):0;
+    const rs=plAll.map(k=>({k,v:(gA[k]||{})[key]||0,vb:gB?((gB[k]||{})[key]||0):null})).sort((a,b)=>b.v-a.v||String(a.k).localeCompare(String(b.k)));
+    return h('div',{key:key,style:box},
+      h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'baseline',marginBottom:6}},h('span',{style:{fontWeight:800,fontSize:'.82rem'}},title),h('span',{style:{fontSize:'.72rem',color:'#475569'}},'Total : '+fI(tot))),
+      rs.map(r=>{
+        const pc=tot?r.v/tot*100:0,hi=!plOn||r.k===pl;
+        return h('div',{key:r.k,style:{display:'flex',alignItems:'center',gap:6,marginBottom:4,fontSize:'.74rem',opacity:hi?1:.4}},
+          h('span',{title:plName(r.k),style:{width:76,flex:'none',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},plName(r.k)),
+          h('span',{style:{flex:1,minWidth:20,height:9,background:'#e2e8f0',borderRadius:3,overflow:'hidden'}},h('span',{style:{display:'block',height:'100%',background:'#2563eb',width:Math.max(r.v>0?1:0,Math.round(pc))+'%'}})),
+          h('span',{style:{width:72,textAlign:'right',flex:'none',color:'#334155'}},fI(r.v)),
+          h('span',{style:{width:46,textAlign:'right',flex:'none',fontWeight:700}},pctTxt(pc)),
+          gB&&totB?h('span',{style:{width:58,flex:'none',fontSize:'.66rem'}},h(Delta,{a:pc,b:r.vb/totB*100,kind:'pts'})):null);
+      }));
+  };
+  const synthView=h('div',null,
+    h(Reliab,{rows:rowsA}),
+    h('div',{style:box},ttl('📊 Indicateurs clés'),
+      h('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:6}},
         kpi('Posts',A.n,B&&B.n,fI),
         kpi('Visibilité',A.vis,B&&B.vis,fI),
         kpi('Engagement',A.eng,B&&B.eng,fI),
         kpi("Taux d'engagement",rate(A),B&&rate(B),(v)=>fP(v,2)+' %','pts'),
         tops.hasEq?kpi('Équivalent média',A.eq,B&&B.eq,fI):null,
-        tops.hasDep?kpi('Dépenses paid',A.dep,B&&B.dep,fI,'cost'):null),
-      splitTable('Par plateforme',A.byP,B&&B.byP),
-      splitTable('Par type (owned / paid / earned)',A.byO,B&&B.byO)),
+        tops.hasDep?kpi('Dépenses paid',A.dep,B&&B.dep,fI,'cost'):null)),
+    plOn?h('div',{style:{fontSize:'.72rem',color:'#b91c1c',marginBottom:6}},'Les parts ci-dessous portent sur toutes les plateformes ; « '+plName(pl)+' » est mise en avant.'):null,
+    shareBlock('Part des contenus','n'),shareBlock('Part des engagements','eng'),shareBlock('Part de la visibilité','vis'),tops.hasEq?shareBlock('Part de l\'EMV','eq'):null,
+    h('div',{style:box},splitTable('Par type (owned / paid / earned)',A.byO,B&&B.byO)));
 
-    tG?h('div',{style:box},ttl('🔎 Ce qui explique l\'écart'),
-      row('Regrouper par',sel(dim,setDim,dimOpts)),row('Indicateur',sel(gmet,setGmet,[{value:'vis',label:'Visibilité'},{value:'eng',label:'Engagement'}])),
-      h(Tbl,{t:tG,hideTitle:true,onToast})):null,
-    tBr?h('div',{style:box},ttl('🏷️ Part de voix par marque'),
-      h('div',{style:{fontSize:'.72rem',color:'#64748b',marginBottom:6}},'Calculé sur toutes les marques de la période (le filtre « marque » ci-dessus ne s\'applique pas ici).'),h(Tbl,{t:tBr,hideTitle:true,onToast})):null,
-    tMu?h('div',{style:box},ttl('🗓️ Toutes les valeurs côte à côte'),h(Tbl,{t:tMu,hideTitle:true,onToast})):null,
-    h('div',{style:box},ttl('📈 Évolution mensuelle'),
-      h('div',{style:{display:'flex',gap:6,alignItems:'center',marginBottom:6,fontSize:'.75rem'}},h('span',{style:{color:'#64748b'}},'Indicateur :'),
-        sel(metric,setMetric,[{value:'vis',label:'Visibilité'},{value:'eng',label:'Engagement'},{value:'n',label:'Nombre de posts'}].concat(tops.hasEq?[{value:'eq',label:'Équivalent média'}]:[]))),
-      h('label',{style:{fontSize:'.73rem',color:'#475569',display:'block',marginBottom:4}},h('input',{type:'checkbox',checked:stack,onChange:e=>setStack(e.target.checked)}),' Empiler par plateforme'),
-      stack?h(MonthStack,{rows:base,metric}):h(MonthChart,{series,aSet,bSet,metric}),
-      h('div',{style:{display:'flex',gap:10,fontSize:'.68rem',color:'#64748b',marginTop:4,flexWrap:'wrap'}},
-        selA?h('span',null,h('span',{style:{color:PCOL.a}},'■'),' période affichée'):null,hasB?h('span',null,h('span',{style:{color:PCOL.b}},'■'),' comparaison'):null,h('span',null,h('span',{style:{color:PCOL.o}},'■'),' autres mois')),
-      notes.length?h('div',{style:{marginTop:8,fontSize:'.76rem'}},
-        h('div',{style:{fontWeight:700,marginBottom:3}},'Mois à noter (> 1,5 × ou < 0,5 × la médiane)'),
-        notes.map(n=>{
-          const top=base.filter(x=>x.mk===n.mk).sort((a,b)=>metricVal(b,metric==='n'?'vis':metric)-metricVal(a,metric==='n'?'vis':metric)).slice(0,3);
-          return h('div',{key:n.mk,style:{marginBottom:5}},
-            h('div',null,(n.hi?'▲ ':'▼ ')+mkLabel(n.mk)+' — '+fI(n.v)+' ('+fP(n.ratio)+' × la médiane)'),
-            h('div',{style:{color:'#64748b'}},'Posts principaux : ',top.map((x,i)=>h('span',{key:i},i?', ':'',h('a',{className:'rl','data-sec':'DATA','data-row':x.er},'ligne '+x.er),' ('+x.p+', '+fI(metricVal(x,metric==='n'?'vis':metric))+')'))));
-        })):null),
+  /* ── Évolution ── */
+  const metOpts=[['n','Contenus'],['eng','Engagements'],['vis','Visibilité']].concat(tops.hasEq?[['eq','EMV']]:[]);
+  const evolView=h('div',{style:box},ttl('📈 Évolution mensuelle'+(plOn?' · '+plName(pl):'')),
+    h('div',{style:{display:'grid',gridTemplateColumns:'repeat('+metOpts.length+',minmax(0,1fr))',gap:6,marginBottom:8}},
+      metOpts.map(([k,l])=>h('button',{key:k,style:segB(metric===k),onClick:()=>setMetric(k)},l))),
+    !plOn?h('label',{style:{fontSize:'.73rem',color:'#475569',display:'block',marginBottom:4}},h('input',{type:'checkbox',checked:stack,onChange:e=>setStack(e.target.checked)}),' Empiler par plateforme'):null,
+    (stack&&!plOn)?h(MonthStack,{rows:base,metric}):h(MonthChart,{series,aSet,bSet,metric}),
+    h('div',{style:{display:'flex',gap:10,fontSize:'.68rem',color:'#64748b',marginTop:4,flexWrap:'wrap'}},
+      selA?h('span',null,h('span',{style:{color:PCOL.a}},'■'),' période affichée'):null,hasB?h('span',null,h('span',{style:{color:PCOL.b}},'■'),' comparaison'):null,h('span',null,h('span',{style:{color:PCOL.o}},'■'),' autres mois')),
+    notes.length?h('div',{style:{marginTop:8,fontSize:'.76rem'}},
+      h('div',{style:{fontWeight:700,marginBottom:3}},'Mois à noter (> 1,5 × ou < 0,5 × la médiane)'),
+      notes.map(n=>{
+        const top=base.filter(x=>x.mk===n.mk).sort((a,b)=>metricVal(b,metric==='n'?'vis':metric)-metricVal(a,metric==='n'?'vis':metric)).slice(0,3);
+        return h('div',{key:n.mk,style:{marginBottom:5}},
+          h('div',null,(n.hi?'▲ ':'▼ ')+mkLabel(n.mk)+' — '+fI(n.v)+' ('+fP(n.ratio)+' × la médiane)'),
+          h('div',{style:{color:'#64748b'}},'Posts principaux : ',top.map((x,i)=>h('span',{key:i},i?', ':'',h('a',{className:'rl','data-sec':'DATA','data-row':x.er},'ligne '+x.er),' ('+plName(x.p)+', '+fI(metricVal(x,metric==='n'?'vis':metric))+')'))));
+      })):null);
 
-    h('div',{style:box},ttl('🎯 Concentration'),
+  /* ── Détails : les tableaux d'analyse, repliés ── */
+  const gr=(k,title,children)=>h(Group,{key:k,title,count:1,noCount:true,open:anaOpen.has(k),onToggle:()=>flipA(k)},children);
+  const detView=h('div',null,
+    gr('ins','💡 Points à retenir',h('div',{style:{...box,background:'#eff6ff',borderColor:'#bfdbfe'}},
+      h('div',{style:{display:'flex',justifyContent:'flex-end'}},h('button',{style:BTN_N,onClick:()=>copyText(insights.map(s=>'• '+s).join('\n'),(ok)=>onToast(ok?'Points à retenir copiés.':'Copie impossible depuis ce volet.'))},'📋 Copier')),
+      h('ul',{style:{margin:0,paddingLeft:'1.1rem',fontSize:'.78rem',lineHeight:1.6,color:'#1e293b'}},insights.map((s,i)=>h('li',{key:i},s))),
+      h('div',{style:{fontSize:'.68rem',color:'#64748b',marginTop:6}},'Constats chiffrés calculés depuis DATA, sans interprétation.'))),
+    gr('pl','🧩 Tableau par plateforme',h('div',{style:box},splitTable('Par plateforme',A.byP,B&&B.byP))),
+    tG?gr('gap','🔎 Ce qui explique l\'écart',h('div',{style:box},row('Regrouper par',sel(dim,setDim,dimOpts)),row('Indicateur',sel(gmet,setGmet,[{value:'vis',label:'Visibilité'},{value:'eng',label:'Engagement'}])),h(Tbl,{t:tG,hideTitle:true,onToast}))):null,
+    tBr?gr('br','🏷️ Part de voix par marque',h('div',{style:box},
+      h('div',{style:{fontSize:'.72rem',color:'#64748b',marginBottom:6}},'Calculé sur toutes les marques de la période (le filtre « marque » ne s\'applique pas ici'+(plOn?', mais le filtre plateforme oui':'')+').'),h(Tbl,{t:tBr,hideTitle:true,onToast}))):null,
+    tMu?gr('mu','🗓️ Toutes les valeurs côte à côte',h('div',{style:box},h(Tbl,{t:tMu,hideTitle:true,onToast}))):null,
+    gr('conc','🎯 Concentration',h('div',{style:box},
       h('div',{style:{fontSize:'.72rem',color:'#64748b',marginBottom:6}},'Sur la période affichée ('+labA+').'),
       concBlock('Visibilité',cV),concBlock('Engagement',cE),
       cV?h('div',null,h('div',{style:{fontWeight:700,fontSize:'.76rem',marginBottom:3}},'5 premiers posts (visibilité)'),
         h('table',{style:{width:'100%',borderCollapse:'collapse',fontSize:'.72rem'}},h('tbody',null,cV.top.map((a,i)=>h('tr',{key:i},
           h('td',{style:{padding:'3px 5px',borderBottom:'1px solid #f1f5f9',color:'#94a3b8'}},i+1),
           h('td',{style:{padding:'3px 5px',borderBottom:'1px solid #f1f5f9'}},h('a',{className:'rl','data-sec':'DATA','data-row':a.x.er},'ligne '+a.x.er)),
-          h('td',{style:{padding:'3px 5px',borderBottom:'1px solid #f1f5f9'}},a.x.p),
+          h('td',{style:{padding:'3px 5px',borderBottom:'1px solid #f1f5f9'}},plName(a.x.p)),
           h('td',{style:{padding:'3px 5px',borderBottom:'1px solid #f1f5f9',textAlign:'right',fontWeight:700}},fI(a.v)),
-          h('td',{style:{padding:'3px 5px',borderBottom:'1px solid #f1f5f9',textAlign:'right',color:'#64748b'}},fP(a.v/cV.tot*100,0)+' %')))))):h('div',{style:{color:'#64748b',fontSize:'.76rem'}},'Aucune visibilité sur cette période.')),
-
-    tPd?h('div',{style:box},ttl('💶 Efficacité du paid'),h(Tbl,{t:tPd,hideTitle:true,onToast})):null,
-    (tRy||tAc||tBk)?h('div',{style:box},ttl('🕒 Rythme, comptes et ruptures'),
+          h('td',{style:{padding:'3px 5px',borderBottom:'1px solid #f1f5f9',textAlign:'right',color:'#64748b'}},fP(a.v/cV.tot*100,0)+' %')))))):h('div',{style:{color:'#64748b',fontSize:'.76rem'}},'Aucune visibilité sur cette période.'))),
+    tPd?gr('paid','💶 Efficacité du paid',h('div',{style:box},h(Tbl,{t:tPd,hideTitle:true,onToast}))):null,
+    (tRy||tAc||tBk)?gr('ry','🕒 Rythme, comptes et ruptures',h('div',{style:box},
       h(Tbl,{t:tRy,onToast}),
       h(Tbl,{t:tAc,onToast}),
       tAc&&tAc.inactive?h('div',{style:{fontSize:'.72rem',color:'#b45309',marginBottom:8}},'⚠️ '+tAc.inactive+' compte'+(tAc.inactive>1?'s':'')+' sans publication depuis plus de 60 jours avant le dernier post de la base.'):null,
-      h(Tbl,{t:tBk,onToast})):null,
-    h('div',{style:box},ttl('📋 Récapitulatif'),
+      h(Tbl,{t:tBk,onToast}))):null,
+    gr('rc','📋 Récapitulatif',h('div',{style:box},
       h('div',{style:{fontSize:'.72rem',color:'#64748b',marginBottom:6}},'Sur la période affichée ('+labA+')'+(on?' — filtré sur « '+brand+' »':'')+'.'),
-      h(RecapRows,{rows:rowsA,hasVis:tops.hasVis})),
+      h(RecapRows,{rows:rowsA,hasVis:tops.hasVis}))));
 
-    h(Group,{title:'🏆 Top '+TOPN+' par visibilité'+(on?' — FILTRÉ : '+brand:''),accent:on?'#dc2626':null,count:Object.keys(topsBy(rowsA,false,-1)).length,open:openT.has('v'),onToggle:()=>flipT('v')},
-      h('div',{style:{background:'#fff',borderRadius:8,padding:8,overflowX:'auto'}},
-        h('div',{style:{fontSize:'.72rem',color:'#64748b',marginBottom:6}},'Sur la période affichée ('+labA+').'),
-        h(TopTable,{items:rowsA,isEng:false,bi:-1,hasSOA:tops.hasSOA,onToast}))),
-    h(Group,{title:'🔥 Top '+TOPN+' par engagement'+(on?' — FILTRÉ : '+brand:''),accent:on?'#dc2626':null,count:Object.keys(topsBy(rowsA,true,-1)).length,open:openT.has('e'),onToggle:()=>flipT('e')},
-      h('div',{style:{background:'#fff',borderRadius:8,padding:8,overflowX:'auto'}},
-        h('div',{style:{fontSize:'.72rem',color:'#64748b',marginBottom:6}},'Sur la période affichée ('+labA+'). Engagement = colonne Social Actions (likes + commentaires seulement si cette colonne n\'existe pas), hors websites et stories).'),
-        h(TopTable,{items:rowsA,isEng:true,bi:-1,hasSOA:tops.hasSOA,onToast}))),
-    h(Group,{title:'🌍 Top 100 cross-plateformes — visibilité'+(on?' — FILTRÉ : '+brand:''),accent:on?'#dc2626':null,count:rowsA.length?Math.min(100,rowsA.length):0,open:openT.has('xv'),onToggle:()=>flipT('xv')},
-      h('div',{style:{background:'#fff',borderRadius:8,padding:8,overflowX:'auto'}},
-        h('div',{style:{fontSize:'.72rem',color:'#64748b',marginBottom:6}},'Sur la période affichée ('+labA+').'),
-        h(TopCross,{items:rowsA,isEng:false,hasSOA:tops.hasSOA,onToast}))),
-    h(Group,{title:'🌍 Top 100 cross-plateformes — engagement'+(on?' — FILTRÉ : '+brand:''),accent:on?'#dc2626':null,count:rowsA.length?Math.min(100,rowsA.length):0,open:openT.has('xe'),onToggle:()=>flipT('xe')},
-      h('div',{style:{background:'#fff',borderRadius:8,padding:8,overflowX:'auto'}},
-        h('div',{style:{fontSize:'.72rem',color:'#64748b',marginBottom:6}},'Sur la période affichée ('+labA+').'),
-        h(TopCross,{items:rowsA,isEng:true,hasSOA:tops.hasSOA,onToast}))));
+  return h('div',null,
+    periodBox,
+    sub==='synth'?synthView:sub==='evol'?evolView:sub==='more'?detView:topsView);
 }
 /* ═════════ Analyse : tableaux supplémentaires (calculs purs) ═════════ */
 const dTxt=(a,b)=>{const pc=pctVar(a,b);return pc===null?'—':(pc>=0?'▲ ':'▼ ')+fP(Math.abs(pc))+' %';};
@@ -2449,7 +2687,8 @@ function UpdateTab(p){
   const [counts,setCounts]=useState(null);
   const [scope,setScope]=useState('visible');
   const [picked,setPicked]=useState(false);
-  const [track,setTrack]=useState(true);
+  const [track,setTrack]=useState(()=>prefGet('updTrack',true));
+  useEffect(()=>{prefSet('updTrack',track);},[track]);
   const [plan,setPlan]=useState(null);
   const [done,setDone]=useState(null);
   const [last,setLast]=useState(null);
@@ -2458,7 +2697,13 @@ function UpdateTab(p){
   const [err,setErr]=useState('');
   const [drag,setDrag]=useState(false);
   const [undoArmed,setUndoArmed]=useState(false);
-  const live=useRef({});live.current={target,picked,step};
+  const live=useRef({});live.current={target,picked,step,busy};
+  useEffect(()=>{p.regBack&&p.regBack(()=>{
+    const L=live.current;if(L.busy)return true;
+    if(L.step==='review'){setErr('');setStep('scope');return true;}
+    if(L.step==='scope'){setErr('');setStep('files');return true;}
+    if(L.step==='done'){setDone(null);setPlan(null);setStep('files');return true;}
+    return false;});},[]);
   const msg=(e)=>String(e&&e.message?e.message:e);
   const fr=(n)=>fmtN(n);
   const pl=(n,a,b)=>n>1?(b||a+'s'):a;
@@ -2800,8 +3045,237 @@ async function countToolScopes(){
   });
 }
 
+/* ═════════ Profils : nettoyage d'URL, username, doublons de comptes ═════════ */
+const TRACK_RE=/^(utm_.*|igshid|igsh|fbclid|gclid|si|hl|feature|ref|ref_src|ref_url|locale|lang|s|t|_t|_r|is_from_webapp|sender_device|mibextid|rdid|refsrc|_rdr|eav|paipv|pp|ab_channel|share_id|__.*)$/i;
+const isUrlish=(s)=>{s=String(s).trim();if(!s||/\s/.test(s))return false;return looksUrl(s)||(/\./.test(s)&&platOfUrl(s)!=='inconnue');};
+function parseProf(s){
+  s=String(s).trim();
+  const m=/^(?:([a-z][a-z0-9+.-]*):\/\/)?([^\/?#]+)([^?#]*)(?:\?([^#]*))?(?:#.*)?$/i.exec(s);
+  if(!m)return null;
+  const host=m[2].toLowerCase().replace(/^.*@/,'').replace(/:\d+$/,'');
+  const segs=(m[3]||'').split('/').filter(x=>x!=='');
+  const q=[];(m[4]||'').split('&').forEach(p=>{if(!p)return;const i=p.indexOf('=');q.push([i<0?p:p.slice(0,i),i<0?'':p.slice(i+1),i>=0]);});
+  return {host,segs,q};
+}
+const BASE_DOM={facebook:'facebook.com',instagram:'instagram.com',tiktok:'tiktok.com',youtube:'youtube.com',twitch:'twitch.tv',linkedin:'linkedin.com'};
+/* domaine d'origine conservé pour X/Twitter ; www. pour les autres (convention de l'onglet INDEX) ; sous-domaines particuliers conservés */
+function canonHost(pl,host){
+  const h1=host.replace(/^(www|m|mobile|web|mbasic|touch)\./,'');
+  if(pl==='twitter')return h1;
+  const b=BASE_DOM[pl];
+  if(b&&h1===b)return 'www.'+b;
+  return host;
+}
+const decSeg=(x)=>{try{return decodeURIComponent(x);}catch(e){return x;}};
+const RES_IG=new Set(['p','reel','reels','tv','explore','accounts','direct','about','legal','developer','tags','locations','web','challenge','s','share','popular','directory','oauth','emails','api','stories']);
+const RES_TW=new Set(['i','intent','share','home','search','explore','hashtag','notifications','messages','settings','login','signup','compose','tos','privacy','about','download','who_to_follow','topics','lists','communities','jobs','account','oauth','logout','status']);
+const RES_YT=new Set(['watch','shorts','playlist','feed','results','embed','live','hashtag','premium','gaming','music','podcasts','post','channel','c','user','redirect','attribution_link','clip','s','about','t','account','upload','tv','kids']);
+const RES_FB=new Set(['sharer','sharer.php','share','share.php','watch','reel','reels','story.php','permalink.php','photo','photo.php','video.php','videos','events','hashtag','login','login.php','dialog','plugins','help','policies','marketplace','gaming','public','l.php','ads','business','notes','stories','pg','pages','people','groups','profile','home.php','tr','flx','posts','media','privacy','settings','search','friends','bookmarks','messages','permalink','story']);
+const RES_TV=new Set(['videos','directory','downloads','p','settings','subscriptions','turbo','wallet','friends','inventory','drops','search','jobs','store','popout','embed','moderator','u','clip','clips','following','team','prime','broadcast','legal']);
+/* username (toujours sans @, casse conservée) + chemin canonique du profil */
+function extractUser(raw){
+  const p=parseProf(raw);if(!p)return {st:'nomatch',pl:'inconnue',why:'URL illisible'};
+  const pl=platOfUrl(p.host),s=p.segs,s0=s[0]||'',ls=s0.toLowerCase();
+  const no=(why)=>({st:'nomatch',pl,why});
+  const ok=(user,kind,path)=>({st:'ok',pl,user,kind,path});
+  if(pl==='instagram'){
+    if(ls==='stories'&&s[1]&&s[1].toLowerCase()!=='highlights'&&!/^\d+$/.test(s[1]))return ok(s[1],'handle','/'+s[1]);
+    if(!s0||RES_IG.has(ls))return no('pas de compte dans cette URL');
+    if(!/^[A-Za-z0-9._]{1,30}$/.test(s0))return no('nom de compte invalide');
+    return ok(s0,'handle','/'+s0);
+  }
+  if(pl==='twitter'){
+    const u=s0.replace(/^@/,'');
+    if(!u||RES_TW.has(u.toLowerCase()))return no('pas de compte dans cette URL');
+    if(!/^[A-Za-z0-9_]{1,15}$/.test(u))return no('nom de compte invalide');
+    return ok(u,'handle','/'+u);
+  }
+  if(pl==='tiktok'){
+    if(s0.charAt(0)!=='@')return no('pas de compte dans cette URL (lien court ou autre page)');
+    const u=decSeg(s0.slice(1));
+    if(!/^[A-Za-z0-9._]{1,40}$/.test(u))return no('nom de compte invalide');
+    return ok(u,'handle','/@'+u);
+  }
+  if(pl==='youtube'){
+    if(p.host==='youtu.be')return no('lien de vidéo, pas de chaîne');
+    if(s0.charAt(0)==='@'){const u=decSeg(s0.slice(1));return u?ok(u,'handle','/@'+u):no('handle vide');}
+    if(ls==='channel'&&s[1])return ok(decSeg(s[1]),'channel','/channel/'+s[1]);
+    if((ls==='c'||ls==='user')&&s[1])return ok(decSeg(s[1]),'name','/'+ls+'/'+s[1]);
+    if(!s0||RES_YT.has(ls))return no('pas de chaîne dans cette URL');
+    return ok(decSeg(s0),'name','/'+s0);
+  }
+  if(pl==='facebook'){
+    if(p.host==='fb.watch')return no('lien de vidéo, pas de page');
+    if(ls==='profile.php'){const q=p.q.find(x=>x[0].toLowerCase()==='id');const id=q?q[1]:'';return /^\d+$/.test(id)?ok(id,'id','/profile.php?id='+id):no('profile.php sans identifiant');}
+    if((ls==='pages'||ls==='people')&&s.length>=3&&/^\d+$/.test(s[s.length-1]))return ok(s[s.length-1],'id',null);
+    if(ls==='groups'&&s[1])return ok(decSeg(s[1]),'group','/groups/'+s[1]);
+    if(ls==='pg'&&s[1])return ok(decSeg(s[1]),'handle','/'+s[1]);
+    if(!s0||RES_FB.has(ls))return no('pas de page dans cette URL');
+    if(/^\d+_\d+$/.test(s0))return no('URL de post, pas de compte');
+    return ok(decSeg(s0),/^\d+$/.test(s0)?'id':'handle','/'+s0);
+  }
+  if(pl==='linkedin'){
+    if(['company','in','school','showcase'].indexOf(ls)>=0&&s[1])return ok(decSeg(s[1]),'slug','/'+ls+'/'+s[1]);
+    return no('pas de profil ni de page entreprise dans cette URL');
+  }
+  if(pl==='twitch'){
+    if(!s0||RES_TV.has(ls)||/^clips\./.test(p.host))return no('pas de chaîne dans cette URL');
+    if(!/^[A-Za-z0-9_]{2,25}$/.test(s0))return no('nom de chaîne invalide');
+    return ok(s0,'handle','/'+s0);
+  }
+  if(pl==='strava'){
+    if((ls==='athletes'||ls==='clubs')&&s[1])return ok(decSeg(s[1]),'id','/'+ls+'/'+s[1]);
+    return no('pas de profil dans cette URL');
+  }
+  return no('plateforme non reconnue');
+}
+const CLEAN_PL=['facebook','instagram','twitter','youtube','tiktok','linkedin','twitch','strava'];
+/* URL de profil nettoyée : https, domaine normalisé, sans slash final ni fragment ni paramètres de suivi ; la casse du chemin n'est jamais modifiée */
+function cleanProfileUrl(raw,o){
+  const p=parseProf(raw);if(!p||p.host.indexOf('.')<0)return null;
+  const pl=platOfUrl(p.host);if(CLEAN_PL.indexOf(pl)<0)return null;
+  const host=canonHost(pl,p.host);
+  if(o&&o.profileOnly){const x=extractUser(raw);if(x.st==='ok'&&x.path!==null)return 'https://'+host+x.path;}
+  const dropAll=['instagram','tiktok','twitter','linkedin','twitch'].indexOf(pl)>=0;
+  const q=dropAll?[]:p.q.filter(x=>!TRACK_RE.test(x[0]));
+  return 'https://'+host+(p.segs.length?'/'+p.segs.join('/'):'')+(q.length?'?'+q.map(x=>x[2]?x[0]+'='+x[1]:x[0]).join('&'):'');
+}
+const normUserKey=(pl,u)=>pl==='youtube'?(/^UC[\w-]{22}$/.test(u)?u:u.toLowerCase()):u.toLowerCase();
+
+async function planProfile(sel,o){   // o.kind : 'clean' | 'user'
+  const ign={'cellules sans URL':0,'formules ignorées':0};const ch=[],bad=[];let exists=0,same=0,unk=0;
+  const urls=[];
+  for(const c of sel.cells){
+    if(isF(c.f)){ign['formules ignorées']++;continue;}
+    if(typeof c.v!=='string'||!isUrlish(c.v)){ign['cellules sans URL']++;continue;}
+    urls.push(c);
+  }
+  let tmap=null;
+  if(o.mode==='fill'){
+    if(o.tcol==null)throw new Error('Choisissez la colonne à remplir.');
+    if(o.colsSheet!==sel.sheet)throw new Error("La sélection est sur la feuille « "+sel.sheet+" » mais les colonnes proposées viennent de « "+o.colsSheet+" » : cliquez sur ↻ pour relire les colonnes.");
+    if(urls.some(c=>c.c===o.tcol))throw new Error('La colonne à remplir contient des URL sélectionnées : choisissez une autre colonne, ou « À la place des URL ».');
+    tmap=await readTarget(sel.sheet,o.tcol,new Set(urls.map(c=>c.r)));
+  }
+  const rowSeen=new Set(),reasons={};
+  for(const c of urls){
+    let out=null,pl=null;
+    if(o.kind==='clean'){
+      pl=platOfUrl(c.v);
+      out=cleanProfileUrl(c.v,{profileOnly:o.profileOnly});
+      if(out===null){unk++;continue;}
+    }else{
+      const x=extractUser(c.v);pl=x.pl;
+      if(x.st!=='ok'){bad.push({r:c.r,pl:x.pl,v:c.v,why:x.why});reasons[x.why]=(reasons[x.why]||0)+1;continue;}
+      out=x.user;
+    }
+    if(o.mode==='fill'){
+      const t=tmap.get(c.r);
+      if(rowSeen.has(c.r)){ign['2e URL sur une même ligne']=(ign['2e URL sur une même ligne']||0)+1;continue;}
+      rowSeen.add(c.r);
+      if(t&&(!isEmptyV(t.v)||isF(t.f))){exists++;continue;}
+      ch.push({r:c.r,c:o.tcol,v:out,fmt:'@',expect:'empty',before:c.v,pl});
+    }else{
+      if(out===c.v){same++;continue;}
+      ch.push({r:c.r,c:c.c,v:out,fmt:'@',expect:'same',before:c.v,pl});
+    }
+  }
+  if(exists)ign['cellule cible déjà remplie (non touchée)']=exists;
+  if(same)ign['déjà propre'+(same>1?'s':'')]=same;
+  if(unk)ign['plateforme non reconnue (non touchée'+(unk>1?'s':'')+')']=unk;
+  return {changes:ch,ign,bad,sheet:sel.sheet,truncated:sel.truncated,showRule:false,
+    badLabel:o.kind==='user'?'sans username déterminable':'',badUnit:'lien',
+    badNote:Object.keys(reasons).map(k=>reasons[k]+' × '+k).join(' ; '),
+    byPl:ch.reduce((m,x)=>{m[x.pl]=(m[x.pl]||0)+1;return m;},{})};
+}
+
+/* ── Doublons de comptes : clé = (plateforme, username) ── */
+const DUP_RE=/^doublon de la ligne \d+$/;
+const DUP_HEAD='Doublon de compte';
+function dedupPlan(rows,scopeSet,markC){
+  const seen=new Map(),ch=[],bad=[],byPl={};let dup=0,unchanged=0,usedMark=0,formulaMark=0,scanned=0;const grp=new Set();
+  const reasons={};
+  for(const x of rows){
+    if(scopeSet&&!scopeSet.has(x.r))continue;
+    if(x.key===null||x.key===undefined||String(x.key).trim()==='')continue;
+    scanned++;
+    const raw=String(x.key).trim();
+    let pl='',user=null;
+    if(x.plat!==null&&x.plat!==undefined&&String(x.plat).trim()!=='')pl=normPlatCell(x.plat)||normHdr(x.plat);
+    if(isUrlish(raw)){const e=extractUser(raw);if(e.st==='ok'){user=e.user;if(!pl)pl=e.pl;}else if(!pl&&e.pl!=='inconnue')pl=e.pl;}
+    else user=raw.replace(/^@/,'');
+    if(!pl||!user){bad.push({r:x.r,v:raw});const w=!pl?'plateforme inconnue':'compte non déterminable';reasons[w]=(reasons[w]||0)+1;continue;}
+    const key=pl+'|'+normUserKey(pl,user);
+    const first=seen.get(key);
+    let want='';
+    if(first===undefined)seen.set(key,x.r+1);
+    else{want='doublon de la ligne '+first;dup++;grp.add(key);byPl[pl]=(byPl[pl]||0)+1;}
+    if(x.markF){formulaMark++;continue;}
+    const cur=(x.mark===''||x.mark===null||x.mark===undefined)?'':String(x.mark);
+    if(want===''){
+      if(DUP_RE.test(cur))ch.push({r:x.r,c:markC,v:'',fmt:null,expect:'same',before:cur,label:'(marque retirée)',showBefore:raw});
+      continue;
+    }
+    if(cur===want){unchanged++;continue;}
+    if(cur!==''&&!DUP_RE.test(cur)){usedMark++;continue;}
+    ch.push({r:x.r,c:markC,v:want,fmt:'@',expect:cur===''?'empty':'same',before:cur,label:want,showBefore:raw});
+  }
+  return {changes:ch,bad,byPl,dup,groups:grp.size,unchanged,usedMark,formulaMark,scanned,
+    badNote:Object.keys(reasons).map(k=>reasons[k]+' × '+k).join(' ; ')};
+}
+async function planDedup(o){
+  const gi=o.gi;
+  const d=await Excel.run(async(ctx)=>{
+    const sh=ctx.workbook.worksheets.getItem(gi.sheet);
+    const ur=sh.getUsedRange(true);ur.load('rowIndex,columnIndex,rowCount,columnCount');await ctx.sync();
+    const first=gi.headerRow+1,last=ur.rowIndex+ur.rowCount-1;
+    const cols=[o.keyC];if(o.platC!=null)cols.push(o.platC);if(o.markC!=null)cols.push(o.markC);
+    const rows=[];
+    for(let r0=first;r0<=last;r0+=20000){
+      const n=Math.min(20000,last-r0+1);
+      const rgs=cols.map((c,k)=>{const rg=sh.getRangeByIndexes(r0,c,n,1);rg.load(k===cols.length-1&&o.markC!=null?'values,formulasR1C1':'values');return rg;});
+      await ctx.sync();
+      const pi=o.platC!=null?1:-1,mi=o.markC!=null?cols.length-1:-1;
+      for(let i=0;i<n;i++){
+        const kv=rgs[0].values[i][0];
+        rows.push({r:r0+i,key:kv===''?null:kv,plat:pi>=0?rgs[pi].values[i][0]:null,mark:mi>=0?rgs[mi].values[i][0]:'',markF:mi>=0?isF(rgs[mi].formulasR1C1[i][0]):false});
+      }
+    }
+    let scopeSet=null;
+    if(o.scope==='visible'&&last>=first){
+      const rg=sh.getRangeByIndexes(first,o.keyC,last-first+1,1);
+      const vis=rg.getSpecialCellsOrNullObject(Excel.SpecialCellType.visible);vis.load('isNullObject');await ctx.sync();
+      if(!vis.isNullObject){vis.areas.load('items/rowIndex,items/rowCount');await ctx.sync();
+        scopeSet=new Set();vis.areas.items.forEach(a=>{for(let k=0;k<a.rowCount;k++)scopeSet.add(a.rowIndex+k);});}
+    }
+    return {rows,scopeSet,newCol:ur.columnIndex+ur.columnCount};
+  });
+  let scopeSet=d.scopeSet;
+  if(o.scope==='selection'){
+    const s=await getSel();
+    if(s.sheet!==gi.sheet)throw new Error('Sélectionnez des lignes dans la feuille « '+gi.sheet+' » (la sélection actuelle est dans « '+s.sheet+' »).');
+    scopeSet=new Set();s.areas.forEach(a=>{for(let k=0;k<a.rowCount;k++)scopeSet.add(a.rowIndex+k);});
+  }
+  const newMark=o.markC==null;
+  const markC=newMark?d.newCol:o.markC;
+  if(markC===o.keyC||markC===o.platC)throw new Error('La colonne de marquage doit être différente de la colonne comparée.');
+  const r=dedupPlan(d.rows,scopeSet,markC);
+  const changes=r.changes;
+  if(newMark&&changes.length)changes.unshift({r:gi.headerRow,c:markC,v:DUP_HEAD,fmt:null,expect:'empty',before:'',label:'(en-tête)',showBefore:'nouvelle colonne'});
+  const ign={};
+  if(r.unchanged)ign['déjà marquée'+(r.unchanged>1?'s':'')+' à l\'identique']=r.unchanged;
+  if(r.usedMark)ign['cellule'+(r.usedMark>1?'s':'')+' de marquage déjà utilisée'+(r.usedMark>1?'s':'')+' (non écrasée'+(r.usedMark>1?'s':'')+')']=r.usedMark;
+  if(r.formulaMark)ign['formule'+(r.formulaMark>1?'s':'')+' dans la colonne de marquage']=r.formulaMark;
+  return {changes,ign,bad:r.bad,sheet:gi.sheet,truncated:false,showRule:false,scanUnit:'ligne',scanned:r.scanned,
+    byPl:r.byPl,badLabel:'sans plateforme ou compte déterminé',badUnit:'ligne',badNote:r.badNote,
+    extra:r.dup?(r.dup+' doublon'+(r.dup>1?'s':'')+' repéré'+(r.dup>1?'s':'')+' sur '+r.groups+' compte'+(r.groups>1?'s':'')+' présent'+(r.groups>1?'s':'')+' plusieurs fois. La 1re occurrence n\'est pas marquée. Aucune ligne n\'est supprimée.'):'Aucun doublon repéré.'};
+}
+
 const TOOLS=[
   {k:'ids',ic:'🆔',t:'Extraire l\'ID des URL',d:'Transforme des liens de posts en identifiants (Facebook, Instagram, X, YouTube, TikTok…).',verb:'extrait',noun:'ID'},
+  {k:'profurl',ic:'🧼',t:'Nettoyer les URL de profil',d:'https, domaine normalisé, sans paramètres de suivi ni slash final. La casse du compte n\'est jamais modifiée.',verb:'nettoie',noun:'URL'},
+  {k:'username',ic:'👤',t:'Extraire le username des URL de profil',d:'Instagram, X/Twitter, TikTok, YouTube, Facebook, LinkedIn, Twitch. Toujours sans @, casse conservée.',verb:'extrait',noun:'username'},
+  {k:'dedup',ic:'👥',t:'Repérer les doublons de comptes',d:'Compare plateforme + username (un même nom sur deux plateformes n\'est pas un doublon). Marque les doublons sans rien supprimer.',verb:'marque',noun:'doublon'},
   {k:'player',ic:'🔗',t:'Shorts et reels → lien standard',d:'youtube.com/shorts/… et facebook.com/reel/… deviennent des liens de lecteur classiques.',verb:'convertit',noun:'lien'},
   {k:'dates',ic:'📅',t:'Dates : retirer l\'heure',d:'2026-10-19T18:18:30Z devient 2026-10-19, sans conversion de fuseau.',verb:'nettoie',noun:'date'},
   {k:'spaces',ic:'🧹',t:'Supprimer les espaces parasites',d:'Espaces en début et fin de cellule (y compris invisibles).',verb:'nettoie',noun:'cellule'}];
@@ -2821,16 +3295,44 @@ function GuidedTools(p){
   const [busy,setBusy]=useState('');
   const [prog,setProg]=useState('');
   const [err,setErr]=useState('');
-  const live=useRef({});live.current={step};
+  const [profOnly,setProfOnly]=useState(false);
+  const [dd,setDd]=useState(null);
+  const [ddCounts,setDdCounts]=useState(null);
+  const [ddScope,setDdScope]=useState('all');
+  const live=useRef({});live.current={step,tool,dd,busy};
+  useEffect(()=>{p.regBack&&p.regBack(()=>{
+    const L=live.current;if(L.busy)return true;
+    if(L.step==='review'){setErr('');setStep('setup');return true;}
+    if(L.step==='setup'){setErr('');setStep('home');return true;}
+    if(L.step==='done'){setDone(null);setPlan(null);setTool(null);setStep('home');return true;}
+    return false;});},[]);
   const msg=(e)=>String(e&&e.message?e.message:e);
   const pl=(n,a,b)=>n>1?(b||a+'s'):a;
   const T=tool?TOOLS.find(x=>x.k===tool):null;
 
-  const recount=async()=>{try{const c=await countToolScopes();setCounts(c);}catch(e){}};
-  const loadCols=async()=>{
+  const recount=async(k)=>{
+    const t=k||live.current.tool;
+    try{
+      if(t==='dedup'){const d=live.current.dd;if(d&&d.gi&&d.keyC!=null)setDdCounts(await countScopes(d.gi.sheet,d.keyC,d.gi.headerRow+1));}
+      else setCounts(await countToolScopes());
+    }catch(e){}
+  };
+  const loadCols=async(k)=>{
+    const names=k==='username'?['username','author username','author_username','compte','account','pseudo','handle']:['post_id','id post','id_post','id','ids'];
     try{const r=await sheetCols();setCols(r);
-      setTcol((cur)=>{if(cur!==null&&r.cols.some(x=>x.c===cur))return cur;const g=r.cols.find(x=>['post_id','id post','id_post','id','ids'].indexOf(x.name.toLowerCase())>=0);return g?g.c:null;});
+      setTcol((cur)=>{if(cur!==null&&r.cols.some(x=>x.c===cur))return cur;const g=r.cols.find(x=>names.indexOf(x.name.toLowerCase().replace(/[_]+/g,' '))>=0||names.indexOf(x.name.toLowerCase())>=0);return g?g.c:null;});
     }catch(e){setErr(msg(e));}
+  };
+  const initDedup=async()=>{
+    const g=await readSheetCols();
+    const find=(nm)=>{const x=g.cols.find(c=>nm.indexOf(normHdr(c.name))>=0);return x?x.c:null;};
+    const d={gi:g,keyC:find(['url','url compte','url profil','profil','compte','username','author username','account','account url','lien','link']),platC:find(['plateforme','platform','social media','reseau','reseau social']),markC:find([normHdr(DUP_HEAD)])};
+    setDd(d);setDdScope('all');setDdCounts(null);
+    if(d.keyC!=null)setDdCounts(await countScopes(g.sheet,d.keyC,g.headerRow+1));
+  };
+  const setDdField=async(k,v)=>{
+    const d={...dd,[k]:v===''?null:+v};setDd(d);
+    if(k==='keyC'){setDdCounts(null);if(d.keyC!=null){try{setDdCounts(await countScopes(d.gi.sheet,d.keyC,d.gi.headerRow+1));}catch(e){}}}
   };
   useEffect(()=>{
     if(step!=='setup')return;
@@ -2839,14 +3341,26 @@ function GuidedTools(p){
     return ()=>{clearTimeout(timer);try{Office.context.document.removeHandlerAsync(Office.EventType.DocumentSelectionChanged,{handler:fn});}catch(e){}};
   },[step]);
 
-  const choose=async(k)=>{setTool(k);setErr('');setPlan(null);setStep('setup');setBusy('x');await recount();if(k==='ids')await loadCols();setBusy('');};
+  const choose=async(k)=>{
+    setTool(k);setErr('');setPlan(null);setMode(k==='profurl'?'inplace':'fill');setStep('setup');setBusy('x');
+    try{
+      if(k==='dedup')await initDedup();
+      else{await recount(k);if(k==='ids'||k==='username')await loadCols(k);}
+    }catch(e){setErr(msg(e));}
+    setBusy('');};
   const analyse=async()=>{
     setErr('');setBusy('plan');setProg('Lecture des cellules…');
     try{
+      if(tool==='dedup'){
+        if(!dd||dd.keyC==null)throw new Error('Choisissez la colonne à comparer.');
+        setProg('Lecture des lignes…');await new Promise(r=>setTimeout(r,20));
+        setPlan(await planDedup({gi:dd.gi,keyC:dd.keyC,platC:dd.platC,markC:dd.markC,scope:ddScope}));setStep('review');setBusy('');setProg('');return;
+      }
       const sel=await readScoped(scope);
       if(!sel.cells.length)throw new Error(scope==='selection'?'Sélectionnez d\'abord des cellules (non vides) dans Excel.':'Aucune cellule non vide dans ce périmètre.');
       setProg('Analyse…');await new Promise(r=>setTimeout(r,20));
-      const r=tool==='ids'?await planIds(sel,{mode,tcol,colsSheet:cols&&cols.sheet}):tool==='player'?await planPlayer(sel):tool==='dates'?await planDates(sel,{real}):await planSpaces(sel);
+      const po={mode,tcol,colsSheet:cols&&cols.sheet};
+      const r=tool==='ids'?await planIds(sel,po):tool==='profurl'?await planProfile(sel,{...po,kind:'clean',profileOnly:profOnly}):tool==='username'?await planProfile(sel,{...po,kind:'user'}):tool==='player'?await planPlayer(sel):tool==='dates'?await planDates(sel,{real}):await planSpaces(sel);
       r.scanned=sel.cells.length;setPlan(r);setStep('review');
     }catch(e){setErr(msg(e));}
     setBusy('');setProg('');
@@ -2857,8 +3371,8 @@ function GuidedTools(p){
       const collect=[];
       const r=await withManualCalc(()=>writeChanges(plan.sheet,plan.changes,(a,b)=>setProg('Écriture '+fmtN(a)+' / '+fmtN(b)+'…'),collect));
       setProg('Journal…');const lot=nowStr();let logErr='';
-      const scopeLbl=scope==='selection'?'sélection':scope==='visible'?'sélection (lignes visibles)':'colonnes entières';
-      try{await appendLog(plan.sheet,lot,collect,{},{tool:T.t,summary:'Périmètre : '+scopeLbl+' · '+r.n+' cellule'+pl(r.n,'')+' modifiée'+pl(r.n,'')+(r.skipped?' · '+r.skipped+' non touchée'+pl(r.skipped,''):'')+(plan.bad&&plan.bad.length?' · '+plan.bad.length+' sans ID':'')});}catch(e){logErr=msg(e);}
+      const scopeLbl=tool==='dedup'?'lignes ('+(ddScope==='all'?'toutes':ddScope==='visible'?'visibles':'sélection')+')':scope==='selection'?'sélection':scope==='visible'?'sélection (lignes visibles)':'colonnes entières';
+      try{await appendLog(plan.sheet,lot,collect,{},{tool:T.t,summary:'Périmètre : '+scopeLbl+' · '+r.n+' cellule'+pl(r.n,'')+' modifiée'+pl(r.n,'')+(r.skipped?' · '+r.skipped+' non touchée'+pl(r.skipped,''):'')+(plan.bad&&plan.bad.length?' · '+plan.bad.length+' '+(plan.badLabel||'sans ID'):'')});}catch(e){logErr=msg(e);}
       setDone({n:r.n,skipped:r.skipped,logErr});setStep('done');
     }catch(e){setErr(msg(e));}
     setBusy('');setProg('');
@@ -2881,14 +3395,42 @@ function GuidedTools(p){
       h('div',{style:{fontSize:'.73rem',color:'#475569',marginTop:3,lineHeight:1.5}},t.d))),
     h(LastActionBar,{onToast}));
 
+  const screenSetupDedup=()=>{
+    const g=dd&&dd.gi,c=ddCounts;
+    const opts=g?g.cols.map(x=>({value:String(x.c),label:x.letter+(x.name?' · '+x.name:'')})):[];
+    const cards=[['all','Toutes les lignes','Toutes les lignes de la feuille qui ont une valeur dans la colonne comparée.',c?c.all:0],
+      ['visible','Lignes visibles seulement','Ignore les lignes masquées par vos filtres.',c?c.visible:0],
+      ['selection','Ma sélection','Seules les lignes sélectionnées dans Excel sont comparées entre elles.',c?c.selection:0]];
+    return h('div',null,
+      h('div',{style:box},
+        h('div',{style:{fontWeight:800,fontSize:'.9rem',marginBottom:4}},T.ic+' '+T.t),
+        h('div',{style:{fontSize:'.74rem',color:'#475569',marginBottom:8,lineHeight:1.5}},T.d),
+        g?h('div',{style:{fontSize:'.72rem',color:'#64748b',marginBottom:8}},'Feuille « '+g.sheet+' » · la 1re ligne contient les noms de colonnes. ',h('span',{className:'rl',onClick:()=>initDedup().catch((e)=>setErr(msg(e)))},'↻ Relire')):null,
+        h('div',{style:rowS},h('span',{style:{width:128,color:'#64748b'}},'Colonne comparée'),h(Picker,{value:dd&&dd.keyC!=null?String(dd.keyC):'',onChange:(v)=>setDdField('keyC',v),options:[{value:'',label:'— choisir —'}].concat(opts)})),
+        h('div',{style:{fontSize:'.7rem',color:'#64748b',margin:'-2px 0 6px 134px'}},'URL de profil (ou de post) ou username.'),
+        h('div',{style:rowS},h('span',{style:{width:128,color:'#64748b'}},'Colonne plateforme'),h(Picker,{value:dd&&dd.platC!=null?String(dd.platC):'',onChange:(v)=>setDdField('platC',v),options:[{value:'',label:'— la déduire de l\'URL —'}].concat(opts)})),
+        h('div',{style:{fontSize:'.7rem',color:'#64748b',margin:'-2px 0 6px 134px'}},'Nécessaire si la colonne comparée contient des usernames sans URL.'),
+        h('div',{style:rowS},h('span',{style:{width:128,color:'#64748b'}},'Marquer dans'),h(Picker,{value:dd&&dd.markC!=null?String(dd.markC):'',onChange:(v)=>setDdField('markC',v),options:[{value:'',label:'— nouvelle colonne à la suite —'}].concat(opts)})),
+        h('div',{style:{fontWeight:700,fontSize:'.8rem',margin:'10px 0 6px'}},'Quelles lignes comparer ?'),
+        cards.map(([k,t,d2,n])=>h('div',{key:k,onClick:()=>setDdScope(k),style:selCard(ddScope===k)},
+          h('div',{style:{display:'flex',justifyContent:'space-between',fontWeight:700,fontSize:'.8rem'}},h('span',null,(ddScope===k?'◉ ':'○ ')+t),h('span',null,c?fmtN(n)+' ligne'+pl(n,''):'…')),
+          h('div',{style:{fontSize:'.71rem',color:'#64748b',marginTop:2}},d2))),
+        h('div',{style:{fontSize:'.7rem',color:'#64748b',marginTop:4}},'La 1re occurrence reste vide ; les suivantes reçoivent « doublon de la ligne N ». Rien n\'est supprimé : la suppression de lignes n\'est pas proposée ici.')),
+      errBox,status,
+      h('div',{style:{display:'flex',gap:6}},
+        h('button',{style:{...BTN_N,...big},disabled:!!busy&&busy!=='x',onClick:()=>{setErr('');setStep('home');}},'← Retour'),
+        h('button',{style:{...BTN_B,...big,flex:1},disabled:!!busy||!dd||dd.keyC==null,onClick:analyse},'Voir ce qui va changer →')));
+  };
   const screenSetup=()=>{
+    if(tool==='dedup')return screenSetupDedup();
     const c=counts;
     const cards=[
       ['selection','Ma sélection','Les cellules sélectionnées maintenant dans Excel.',c?c.selection:0],
       ['visible','Ma sélection, lignes visibles seulement','Ignore les lignes masquées par vos filtres.',c?c.visible:0],
       ['columns','Les colonnes de ma sélection, en entier','Toutes les lignes de ces colonnes (sauf la 1re ligne, supposée être l\'en-tête).',c?c.columns:0]];
     const opts=cols?cols.cols.map(x=>({value:String(x.c),label:x.letter+(x.name?' · '+x.name:'')})):[];
-    const idsReady=tool!=='ids'||mode==='inplace'||tcol!==null;
+    const needsCol=tool==='ids'||tool==='profurl'||tool==='username';
+    const idsReady=!needsCol||mode==='inplace'||tcol!==null;
     return h('div',null,
       h('div',{style:box},
         h('div',{style:{fontWeight:800,fontSize:'.9rem',marginBottom:4}},T.ic+' '+T.t),
@@ -2898,13 +3440,15 @@ function GuidedTools(p){
           h('div',{style:{display:'flex',justifyContent:'space-between',fontWeight:700,fontSize:'.8rem'}},h('span',null,(scope===k?'◉ ':'○ ')+t),h('span',null,c?fmtN(n)+' cellule'+pl(n,''):'…')),
           h('div',{style:{fontSize:'.71rem',color:'#64748b',marginTop:2}},d))),
         h('div',{style:{textAlign:'right'}},h('span',{className:'rl',style:{fontSize:'.72rem'},onClick:recount},'↻ Actualiser les nombres'))),
-      tool==='ids'?h('div',{style:box},
-        h('div',{style:{fontWeight:700,fontSize:'.8rem',marginBottom:6}},'Où écrire les ID ?'),
+      (tool==='ids'||tool==='profurl'||tool==='username')?h('div',{style:box},
+        h('div',{style:{fontWeight:700,fontSize:'.8rem',marginBottom:6}},tool==='ids'?'Où écrire les ID ?':tool==='username'?'Où écrire les usernames ?':'Où écrire les URL nettoyées ?'),
         h('div',{style:rowS},modeBtn2(mode,setMode,'fill','Dans une autre colonne'),modeBtn2(mode,setMode,'inplace','À la place des URL')),
         mode==='fill'?h('div',{style:rowS},h('span',{style:{color:'#64748b'}},'Colonne à remplir'),
           h(Picker,{value:tcol===null?'':String(tcol),onChange:(v)=>setTcol(v===''?null:+v),options:[{value:'',label:'— choisir —'}].concat(opts)}),
-          h('span',{className:'rl',onClick:loadCols},'↻'),cols?h('span',{style:{color:'#94a3b8'}},'feuille « '+cols.sheet+' »'):null):null,
-        h('div',{style:{fontSize:'.7rem',color:'#64748b'}},mode==='fill'?'Les cellules déjà remplies de cette colonne ne sont jamais modifiées.':'L\'URL est remplacée par l\'ID dans la cellule (utile pour une colonne dédiée).')):null,
+          h('span',{className:'rl',onClick:()=>loadCols(tool)},'↻'),cols?h('span',{style:{color:'#94a3b8'}},'feuille « '+cols.sheet+' »'):null):null,
+        h('div',{style:{fontSize:'.7rem',color:'#64748b'}},mode==='fill'?'Les cellules déjà remplies de cette colonne ne sont jamais modifiées.':'L\'URL est remplacée dans la cellule : l\'annulation rétablit l\'ancienne valeur.'),
+        tool==='profurl'?h('div',{style:{...rowS,marginTop:8}},modeBtn2(profOnly,setProfOnly,false,'URL complète nettoyée'),modeBtn2(profOnly,setProfOnly,true,'Seulement la page du profil')):null,
+        tool==='profurl'?h('div',{style:{fontSize:'.7rem',color:'#64748b'}},profOnly?'Ex. instagram.com/Nike/reels/ devient www.instagram.com/Nike (les URL de post sans compte identifiable sont simplement nettoyées).':'Le chemin est conservé tel quel, seuls les paramètres de suivi sont retirés.'):null):null,
       tool==='dates'?h('div',{style:box},
         h('div',{style:{fontWeight:700,fontSize:'.8rem',marginBottom:6}},'Format du résultat'),
         h('div',{style:rowS},modeBtn2(real,setReal,true,'Vraie date Excel (affichée aaaa-mm-jj)'),modeBtn2(real,setReal,false,'Texte aaaa-mm-jj'))):null,
@@ -2920,21 +3464,22 @@ function GuidedTools(p){
     return h('div',null,
       h('div',{style:box},
         h('div',{style:{fontWeight:800,fontSize:'1rem',marginBottom:8,color:n?'#166534':'#475569'}},n?fmtN(n)+' cellule'+pl(n,'')+(n>1?' vont':' va')+' être modifiée'+pl(n,''):'Rien à modifier'),
-        n?h('div',{style:{fontSize:'.76rem',color:'#475569',marginBottom:4}},T.ic+' '+T.t+' · '+fmtN(plan.scanned||0)+' cellule'+pl(plan.scanned||0,'')+' lue'+pl(plan.scanned||0,'')):null,
+        n?h('div',{style:{fontSize:'.76rem',color:'#475569',marginBottom:4}},T.ic+' '+T.t+' · '+fmtN(plan.scanned||0)+' '+(plan.scanUnit||'cellule')+pl(plan.scanned||0,'')+' lue'+pl(plan.scanned||0,'')):null,
+        plan.extra?h('div',{style:{fontSize:'.74rem',color:'#334155',marginTop:4}},plan.extra):null,
         ign.length?h('div',{style:{fontSize:'.74rem',color:'#64748b'}},'Ignorées : '+ign.map(k=>plan.ign[k]+' '+k).join(' · ')):null,
-        plan.byPl&&Object.keys(plan.byPl).length?h('div',{style:{fontSize:'.72rem',color:'#475569',marginTop:4}},Object.keys(plan.byPl).map(k=>k+' : '+plan.byPl[k]+(ID_RULES[k]?' ('+ID_RULES[k].note+')':'')).join(' — ')):null,
+        plan.byPl&&Object.keys(plan.byPl).length?h('div',{style:{fontSize:'.72rem',color:'#475569',marginTop:4}},Object.keys(plan.byPl).map(k=>k+' : '+plan.byPl[k]+(plan.showRule!==false&&ID_RULES[k]?' ('+ID_RULES[k].note+')':'')).join(' — ')):null,
         plan.truncated?h('div',{style:{fontSize:'.72rem',color:'#b45309',marginTop:4}},'⚠️ Zone très grande : seules les 300 000 premières cellules ont été analysées.'):null),
       n?h('div',{style:{...box,padding:'.5rem .8rem'}},
         h('div',{style:{fontWeight:700,fontSize:'.78rem',marginBottom:4}},'Aperçu'),
         h('div',{style:{overflowX:'auto'}},h('table',{style:{width:'100%',borderCollapse:'collapse'}},h('tbody',null,
           plan.changes.slice(0,6).map((x,i)=>h('tr',{key:i},
             h('td',{style:{...td,color:'#94a3b8'}},cellRef(x.r,x.c)),
-            h('td',{style:{...td,color:'#64748b',maxWidth:130,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'},title:String(x.before)},shortTxt(x.before,40)),
+            h('td',{style:{...td,color:'#64748b',maxWidth:130,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'},title:String(x.showBefore!==undefined?x.showBefore:x.before)},shortTxt(x.showBefore!==undefined?x.showBefore:x.before,40)),
             h('td',{style:td},'→'),
             h('td',{style:{...td,fontWeight:700}},shortTxt(x.label||x.v,40)))))),
           n>6?h('div',{style:{fontSize:'.7rem',color:'#94a3b8'}},'… et '+fmtN(n-6)+' autres'):null)):null,
       plan.bad&&plan.bad.length?h('div',{style:{fontSize:'.74rem',color:'#92400e',background:'#fffbeb',border:'1px solid #fde68a',borderRadius:6,padding:'5px 8px',marginBottom:10}},
-        plan.bad.length+' lien'+pl(plan.bad.length,'')+' sans ID (plateforme ou format non reconnu), à regarder à la main : lignes '+plan.bad.slice(0,10).map(x=>x.r+1).join(', ')+(plan.bad.length>10?' …':'')):null,
+        plan.bad.length+' '+(plan.badUnit||'lien')+pl(plan.bad.length,'')+' '+(plan.badLabel||'sans ID (plateforme ou format non reconnu)')+(plan.badNote?' ('+plan.badNote+')':'')+', à regarder à la main : lignes '+plan.bad.slice(0,10).map(x=>x.r+1).join(', ')+(plan.bad.length>10?' …':'')):null,
       errBox,status,
       h('div',{style:{display:'flex',gap:6}},
         h('button',{style:{...BTN_N,...big},disabled:!!busy,onClick:()=>{setErr('');setStep('setup');}},'← Retour'),
@@ -3136,6 +3681,224 @@ function RecapRows(p){
 }
 
 const AnalyseMemo=(React.memo||((f)=>f))(AnalyseTab);
+/* ═════════ Onglet Formules (interface) ═════════ */
+async function readFCols(sheet,cols,fromRow){
+  return Excel.run(async(ctx)=>{
+    const ws=ctx.workbook.worksheets.getItem(sheet);
+    const ur=ws.getUsedRangeOrNullObject(true);ur.load('rowIndex,rowCount,isNullObject');await ctx.sync();
+    const out={};const uniq=[...new Set(cols)];
+    if(ur.isNullObject){uniq.forEach(c=>{out[c]=[];});return out;}
+    const last=ur.rowIndex+ur.rowCount-1,n=last-fromRow+1,rg={};
+    uniq.forEach(c=>{if(n<=0){out[c]=[];return;}rg[c]=ws.getRangeByIndexes(fromRow,c,n,1);rg[c].load('values');});
+    await ctx.sync();
+    uniq.forEach(c=>{if(rg[c])out[c]=rg[c].values.map(x=>x[0]);});
+    return out;
+  });
+}
+async function readFRows(sheet,rows){
+  return Excel.run(async(ctx)=>{
+    const ws=ctx.workbook.worksheets.getItem(sheet);
+    const ur=ws.getUsedRangeOrNullObject(true);ur.load('columnIndex,columnCount,isNullObject');await ctx.sync();
+    const out={};if(ur.isNullObject){rows.forEach(r=>{out[r]=[];});return out;}
+    const w=ur.columnIndex+ur.columnCount,rg={};
+    rows.forEach(r=>{rg[r]=ws.getRangeByIndexes(r-1,0,1,w);rg[r].load('values');});await ctx.sync();
+    rows.forEach(r=>{out[r]=rg[r].values[0];});return out;
+  });
+}
+async function readFCell(sheet,r,c){
+  return Excel.run(async(ctx)=>{const g=ctx.workbook.worksheets.getItem(sheet).getCell(r,c);g.load('values');await ctx.sync();return g.values[0][0];});
+}
+async function pickFSel(){
+  const s=await getSel();
+  if(s.areas.length>1)throw new Error('Sélectionnez une seule zone rectangulaire dans Excel.');
+  const a=s.areas[0];
+  return {sheet:s.sheet,r:a.rowIndex,c:a.columnIndex,rows:a.rowCount,cols:a.columnCount,multi:a.rowCount*a.columnCount>1};
+}
+const addrOf=(sheet,r,c,rows,cols)=>sheet+'!'+colL(c)+(r+1)+((rows||1)*(cols||1)>1?':'+colL(c+(cols||1)-1)+(r+(rows||1)):'');
+
+function FormulasTab(p){
+  const {onToast}=p;
+  const [kind,setKind]=useState('lookup');
+  const [variant,setVariant]=useState('v');
+  const [info,setInfo]=useState(null);
+  const [src,setSrc]=useState(null);
+  const [target,setTarget]=useState(null);
+  const [fillRows,setFillRows]=useState(1);
+  const [keyRef,setKeyRef]=useState(null);
+  const [keyC,setKeyC]=useState(null),[resC,setResC]=useState(null),[valC,setValC]=useState(null);
+  const [keyR,setKeyR]=useState(''),[resR,setResR]=useState('');
+  const [nf,setNf]=useState('dash');
+  const [crits,setCrits]=useState([{c:null,op:'=',vt:'cell',ref:null,text:''}]);
+  const [prev,setPrev]=useState(null);
+  const [busy,setBusy]=useState('');
+  const [prog,setProg]=useState('');
+  const [err,setErr]=useState('');
+  const [done,setDone]=useState(null);
+  const msg=(e)=>String(e&&e.message?e.message:e);
+  const live=useRef({});
+
+  const loadInfo=async(name)=>{
+    try{
+      let r=await readSheetCols(name);
+      if(!name){const dn=(window.__realNames&&window.__realNames.DATA)||r.sheets.find(s=>s.toLowerCase()==='data');if(dn&&dn!==r.sheet){try{r=await readSheetCols(dn);}catch(e){}}}
+      setInfo(r);setSrc(r.sheet);setErr('');
+    }catch(e){setErr(msg(e));}
+  };
+  useEffect(()=>{loadInfo();},[]);
+  const changeSrc=async(n)=>{setKeyC(null);setResC(null);setValC(null);setCrits(cs=>cs.map(c=>({...c,c:null})));setPrev(null);await loadInfo(n);};
+
+  const spec={kind,variant,src,keyC,resC,keyR:Number(keyR)||0,resR:Number(resR)||0,nf,keyRef,valC,crits:kind==='lookup'?[]:crits};
+  live.current={spec,target};
+  const specKey=JSON.stringify([spec,target&&[target.sheet,target.r,target.c],info&&info.sheet,info&&info.headerRow]);
+
+  const gather=async()=>{
+    const s=spec,from=info.headerRow+1,d={colV:{},rowV:{},critVals:[]};
+    if(s.kind==='lookup'){
+      d.keyVal=await readFCell(s.keyRef.sheet,s.keyRef.r,s.keyRef.c);
+      if(s.variant==='h')d.rowV=await readFRows(s.src,[s.keyR,s.resR]);else d.colV=await readFCols(s.src,[s.keyC,s.resC],from);
+    }else{
+      const cols=s.crits.map(c=>c.c).concat(s.kind==='count'?[]:[s.valC]);
+      d.colV=await readFCols(s.src,cols,from);
+      for(const c of s.crits)d.critVals.push(c.vt==='cell'?await readFCell(c.ref.sheet,c.ref.r,c.ref.c):c.vt==='num'?fNum(c.text,false)!==null?Number(fNum(c.text,false)):'':c.text);
+    }
+    return d;
+  };
+  useEffect(()=>{
+    let dead=false;
+    const t=setTimeout(async()=>{
+      const e=specError(spec);
+      if(e){setPrev({incomplete:e});return;}
+      if(!target){setPrev({incomplete:'Cliquez sur « Utiliser la cellule sélectionnée » pour indiquer où écrire la formule.'});return;}
+      if(!info||info.sheet!==spec.src){return;}
+      try{
+        const fr=buildFormula(spec,0,0,target.sheet,true),en=buildFormula(spec,0,0,target.sheet,false);
+        const res=evalSpec(spec,await gather());
+        if(!dead)setPrev({fr,en,res});
+      }catch(ex){if(!dead)setPrev({error:msg(ex)});}
+    },450);
+    return ()=>{dead=true;clearTimeout(t);};
+  },[specKey]);
+
+  const takeTarget=async()=>{try{const s=await pickFSel();setTarget(s);setDone(null);setErr('');}catch(e){setErr(msg(e));}};
+  const smartRef=async(setter)=>{
+    try{
+      const s=await pickFSel();setErr('');
+      let fixR=true,fixC=true;
+      if(target&&s.sheet===target.sheet){if(s.r===target.r){fixR=false;fixC=true;}else if(s.c===target.c){fixR=true;fixC=false;}}
+      else if(!target){fixR=false;fixC=true;}
+      setter({sheet:s.sheet,r:s.r,c:s.c,fixR,fixC});
+    }catch(e){setErr(msg(e));}
+  };
+  const updCrit=(i,patch)=>setCrits(cs=>cs.map((c,k)=>k===i?{...c,...patch}:c));
+  const colOpts=info?info.cols.map(x=>({value:x.c,label:'['+x.letter+'] '+x.name})):[];
+  const totalCells=target?(target.multi?target.rows*target.cols:Math.max(1,fillRows)):0;
+
+  const insert=async()=>{
+    setErr('');setDone(null);setBusy('write');
+    try{
+      if(!target)throw new Error('Indiquez d\'abord la cellule où écrire.');
+      const R=target.multi?target.rows:Math.max(1,fillRows),C=target.multi?target.cols:1;
+      if(R*C>20000)throw new Error('Trop de cellules d\'un coup (maximum 20 000).');
+      const cells=[];
+      for(let i=0;i<R;i++)for(let j=0;j<C;j++)cells.push({r:target.r+i,c:target.c+j,formula:buildFormula(spec,i,j,target.sheet,false),expect:'any'});
+      const collect=[];
+      const r=await withManualCalc(()=>writeChanges(target.sheet,cells,(a,b)=>setProg('Écriture '+fmtN(a)+' / '+fmtN(b)+'…'),collect));
+      setProg('Journal…');
+      if(collect.length){ /* on relit la formule réellement stockée par Excel, pour que l'annulation la reconnaisse */
+        await Excel.run(async(ctx)=>{
+          const ws=ctx.workbook.worksheets.getItem(target.sheet);
+          for(let i=0;i<collect.length;i+=500){
+            const part=collect.slice(i,i+500),g=part.map(x=>{const c=ws.getCell(x.r,x.c);c.load('formulas');return c;});
+            await ctx.sync();part.forEach((x,k)=>{x.nw=g[k].formulas[0][0];x.isF=true;});
+          }
+        });
+        const kl={lookup:'Recherche',sum:'Somme conditionnelle',avg:'Moyenne conditionnelle',count:'Comptage conditionnel'}[kind];
+        await appendLog(target.sheet,nowStr(),collect,{},{tool:'Formules guidées',summary:kl+' · '+r.n+' formule'+(r.n>1?'s':'')+' insérée'+(r.n>1?'s':'')+' en '+addrOf(target.sheet,target.r,target.c,R,C)+(r.skipped?' · '+r.skipped+' non touchée'+(r.skipped>1?'s':''):'')});
+      }
+      setDone({n:r.n,skipped:r.skipped});
+      onToast(r.n+' formule'+(r.n>1?'s':'')+' insérée'+(r.n>1?'s':'')+'. Annulable avec « Dernière action ».');
+    }catch(e){setErr(msg(e));}
+    setBusy('');setProg('');
+  };
+
+  const box={background:'#fff',border:'1px solid #e2e8f0',borderRadius:10,padding:'.65rem .75rem',marginBottom:10};
+  const ttl=(t)=>h('div',{style:{fontWeight:800,fontSize:'.86rem',marginBottom:6}},t);
+  const row=(children)=>h('div',{style:{display:'flex',alignItems:'center',gap:6,flexWrap:'wrap',marginBottom:6,fontSize:'.76rem',lineHeight:1.9}},children);
+  const sel=(value,onChange,options)=>h(Picker,{value,onChange,options});
+  const seg=(on)=>({padding:'6px 4px',fontSize:'.74rem',fontWeight:700,cursor:'pointer',border:'1px solid '+(on?'#1e293b':'#94a3b8'),background:on?'#1e293b':'#fff',color:on?'#fff':'#1e293b',borderRadius:6,flex:1});
+  const grid=(n)=>({display:'grid',gridTemplateColumns:'repeat('+n+',minmax(0,1fr))',gap:6,marginBottom:8});
+  const chipB={background:'#dbeafe',color:'#1e3a8a',border:'1px solid #60a5fa',borderRadius:6,padding:'1px 7px',fontSize:'.74rem',fontWeight:700};
+  const refPicker=(rf,setter,label)=>h('span',{style:{display:'inline-flex',alignItems:'center',gap:6,flexWrap:'wrap'}},
+    rf?h('span',{style:chipB},addrOf(rf.sheet,rf.r,rf.c)):h('span',{style:{color:'#b45309'}},'(à choisir)'),
+    h('button',{style:{...BTN_N,padding:'2px 8px'},onClick:()=>smartRef(setter)},rf?'Reprendre la cellule sélectionnée':'Prendre la cellule sélectionnée'),
+    rf?h('label',{style:{fontSize:'.7rem',color:'#475569'}},h('input',{type:'checkbox',checked:rf.fixC,onChange:e=>setter({...rf,fixC:e.target.checked})}),' colonne fixe'):null,
+    rf?h('label',{style:{fontSize:'.7rem',color:'#475569'}},h('input',{type:'checkbox',checked:rf.fixR,onChange:e=>setter({...rf,fixR:e.target.checked})}),' ligne fixe'):null);
+  const kindBtn=(k,l)=>h('button',{onClick:()=>{setKind(k);setDone(null);},style:seg(kind===k)},l);
+  const varBtn=(k,l)=>h('button',{onClick:()=>setVariant(k),style:seg(variant===k)},l);
+  const VHELP={v:'RECHERCHEV : la colonne de recherche doit être la première de la zone, le résultat se trouve à sa droite. Simple et rapide : c\'est le choix par défaut.',
+    h:'RECHERCHEH : comme RECHERCHEV, mais quand les en-têtes sont sur une ligne et les valeurs en dessous.',
+    im:'INDEX / EQUIV : la colonne de recherche et celle du résultat peuvent être n\'importe où, même à gauche. Résiste si l\'on ajoute une colonne.'};
+  const VERB={sum:'Additionner',avg:'Faire la moyenne de',count:'Compter les lignes'};
+  const numInput=(value,onChange,w)=>h('input',{type:'number',min:1,value,onChange:e=>onChange(e.target.value),style:{width:w||64,fontSize:'.76rem',padding:'2px 4px',border:'1px solid #94a3b8',borderRadius:6}});
+
+  const pv=prev;
+  const resBox=h('div',{style:{...box,borderColor:'#94a3b8'}},
+    h('div',{style:{fontSize:'.66rem',fontWeight:800,letterSpacing:'.06em',textTransform:'uppercase',color:'#475569'}},'Aperçu'+(target?' pour '+addrOf(target.sheet,target.r,target.c):'')),
+    !pv?h('div',{style:{fontSize:'.78rem',color:'#64748b',marginTop:4}},'Complétez la phrase ci-dessus.'):
+    pv.incomplete?h('div',{style:{fontSize:'.78rem',color:'#64748b',marginTop:4}},pv.incomplete):
+    pv.error?h('div',{style:{fontSize:'.78rem',color:'#b91c1c',marginTop:4}},pv.error):
+    h('div',null,
+      h('div',{style:{fontSize:'1.55rem',fontWeight:800,marginTop:2,color:pv.res.miss?'#b45309':'#1e293b'}},pv.res.miss?(nf==='dash'&&kind==='lookup'?'—':nf==='zero'&&kind==='lookup'?'0':nf==='blank'&&kind==='lookup'?'(vide)':'#N/A'):fmtFV(pv.res.value)),
+      pv.res.notes.map((t,i)=>h('div',{key:'n'+i,style:{fontSize:'.74rem',color:'#334155'}},t)),
+      pv.res.warns.map((t,i)=>h('div',{key:'w'+i,style:{fontSize:'.74rem',color:'#92400e',background:'#fffbeb',border:'1px solid #fde68a',borderRadius:6,padding:'3px 7px',marginTop:4}},'⚠️ '+t)),
+      h('div',{style:{fontFamily:"Consolas,'Courier New',monospace",fontSize:'.72rem',color:'#64748b',background:'#f1f5f9',borderRadius:6,padding:'6px 8px',marginTop:6,wordBreak:'break-all',lineHeight:1.5}},pv.fr),
+      h('div',{style:{marginTop:5}},h('button',{style:{...BTN_N,padding:'2px 8px'},onClick:()=>copyText(pv.fr,(ok)=>onToast(ok?'Formule copiée.':'Copie impossible depuis ce volet.'))},'📋 Copier la formule'))));
+
+  const canInsert=!!(pv&&pv.res)&&!busy;
+  return h('div',null,
+    h('div',{style:box},ttl('📍 Où écrire la formule ?'),
+      row([target?h('span',{key:'a',style:chipB},addrOf(target.sheet,target.r,target.c,target.rows,target.cols)):h('span',{key:'a',style:{color:'#b45309'}},'(à choisir)'),
+        h('button',{key:'b',style:BTN_B,onClick:takeTarget},target?'Reprendre la sélection':'Utiliser la cellule sélectionnée')]),
+      target&&!target.multi?row([h('span',{key:'x'},'Recopier vers le bas sur'),numInput(fillRows,(v)=>setFillRows(Math.max(1,Math.min(20000,Number(v)||1))),64),h('span',{key:'y'},'ligne'+(fillRows>1?'s':'')+' (1 = cette cellule seulement)')]):null,
+      h('div',{style:{fontSize:'.7rem',color:'#64748b'}},'Sélectionnez la cellule dans Excel, puis cliquez sur le bouton. Une zone sélectionnée reçoit une formule dans chaque cellule.')),
+
+    h('div',{style:grid(4)},kindBtn('lookup','Chercher'),kindBtn('sum','Somme'),kindBtn('avg','Moyenne'),kindBtn('count','Compter')),
+
+    h('div',{style:box},ttl('📄 Feuille des données'),
+      row([h('span',{key:'a'},'Dans la feuille'),info?sel(src,changeSrc,info.sheets.map(s=>({value:s,label:s}))):h('span',{key:'b',style:{color:'#64748b'}},'lecture…'),
+        h('button',{key:'c',style:{...BTN_N,padding:'2px 8px'},onClick:()=>loadInfo(src||undefined)},'↻ Relire les colonnes')]),
+      info?h('div',{style:{fontSize:'.7rem',color:'#64748b'}},'En-têtes lus sur la ligne '+(info.headerRow+1)+' · '+info.cols.length+' colonnes. Les formules visent des colonnes entières : elles suivent l\'ajout de lignes.'):null),
+
+    kind==='lookup'?h('div',{style:box},ttl('🔎 Rechercher une valeur'),
+      h('div',{style:grid(3)},varBtn('v','RECHERCHEV'),varBtn('h','RECHERCHEH'),varBtn('im','INDEX / EQUIV')),
+      h('div',{style:{fontSize:'.72rem',color:'#334155',lineHeight:1.45,background:'#f8fafc',border:'1px solid #e2e8f0',borderRadius:6,padding:'6px 8px',marginBottom:8}},VHELP[variant]),
+      row([h('span',{key:'a'},'Chercher la valeur de la cellule'),refPicker(keyRef,setKeyRef)]),
+      variant==='h'?row([h('span',{key:'a'},'dans la ligne n°'),numInput(keyR,setKeyR),h('span',{key:'b'},'de la feuille, et renvoyer la ligne n°'),numInput(resR,setResR)]):
+        row([h('span',{key:'a'},'dans la colonne'),sel(keyC,setKeyC,colOpts),h('span',{key:'b'},'et renvoyer la colonne'),sel(resC,setResC,colOpts)]),
+      row([h('span',{key:'a'},'Si la valeur est introuvable :'),sel(nf,setNf,[{value:'dash',label:'afficher « — »'},{value:'zero',label:'afficher 0'},{value:'blank',label:'laisser vide'},{value:'na',label:'laisser #N/A'}])])):
+
+    h('div',{style:box},ttl(kind==='sum'?'➕ Additionner selon des critères':kind==='avg'?'📐 Moyenne selon des critères':'🔢 Compter selon des critères'),
+      kind==='count'?h('div',{style:{fontSize:'.76rem',marginBottom:6}},'Compter les lignes de la feuille '+(src||'…')+' qui remplissent tous les critères ci-dessous.'):
+        row([h('span',{key:'a'},VERB[kind]),sel(valC,setValC,colOpts),h('span',{key:'b'},'de la feuille '+(src||'…'))]),
+      crits.map((c,i)=>h('div',{key:i,style:{border:'1px solid #cbd5e1',borderRadius:8,padding:'6px 8px',marginBottom:6,background:'#f8fafc'}},
+        row([h('strong',{key:'l',style:{color:'#1d4ed8'}},i===0?'quand':'et'),sel(c.c,(v)=>updCrit(i,{c:v}),colOpts),sel(c.op,(v)=>updCrit(i,{op:v}),F_OPS),
+          crits.length>1?h('button',{key:'x','aria-label':'Retirer ce critère',style:{...BTN_N,padding:'0 7px',marginLeft:'auto'},onClick:()=>setCrits(cs=>cs.filter((_,k)=>k!==i))},'×'):null]),
+        row([h('span',{key:'a',style:{color:'#64748b'}},'la valeur est'),
+          ['cell','text','num'].map(vt=>h('button',{key:vt,onClick:()=>updCrit(i,{vt}),style:{...seg(c.vt===vt),flex:'none',padding:'2px 8px'}},vt==='cell'?'une cellule':vt==='text'?'un texte':'un nombre'))]),
+        c.vt==='cell'?row([refPicker(c.ref,(rf)=>updCrit(i,{ref:rf}))]):
+          row([h('input',{key:'t',value:c.text,placeholder:c.vt==='num'?'12':'Texte',onChange:e=>updCrit(i,{text:e.target.value}),style:{fontSize:'.76rem',padding:'3px 6px',border:'1px solid #94a3b8',borderRadius:6,width:150}})]))),
+      crits.length<8?h('button',{style:{...BTN_N,width:'100%',padding:'6px'},onClick:()=>setCrits(cs=>cs.concat([{c:null,op:'=',vt:'cell',ref:null,text:''}]))},'+ Ajouter un critère'):null,
+      h('div',{style:{fontSize:'.7rem',color:'#64748b',marginTop:6}},'Chaque critère a sa propre colonne de la feuille. Tous doivent être vrais en même temps.')),
+
+    resBox,
+    err?h('div',{style:{background:'#fef2f2',border:'1px solid #fca5a5',color:'#b91c1c',borderRadius:8,padding:'.45rem .7rem',fontSize:'.78rem',marginBottom:8}},'⚠️ '+err):null,
+    done?h('div',{style:{background:'#f0fdf4',border:'1px solid #86efac',color:'#166534',borderRadius:8,padding:'.45rem .7rem',fontSize:'.78rem',marginBottom:8}},'✅ '+done.n+' formule'+(done.n>1?'s':'')+' insérée'+(done.n>1?'s':'')+(done.skipped?' · '+done.skipped+' cellule'+(done.skipped>1?'s':'')+' non touchée'+(done.skipped>1?'s':'')+' (elle'+(done.skipped>1?'s contiennent':' contient')+' déjà une formule)':'')+'. Annulable avec « Dernière action ».'):null,
+    h('div',{style:{display:'flex',gap:8}},
+      h('button',{style:{...BTN_B,padding:'9px 14px',fontSize:'.84rem',flex:1,opacity:canInsert?1:.5},disabled:!canInsert,onClick:insert},busy?(prog||'En cours…'):(totalCells>1?'Insérer sur '+fmtN(totalCells)+' cellules':'Insérer en '+(target?addrOf(target.sheet,target.r,target.c):'…')))),
+    h('div',{style:{fontSize:'.7rem',color:'#64748b',marginTop:6}},'Une cellule qui contient déjà une formule n\'est jamais écrasée. Une valeur existante est remplacée, et l\'annulation la restaure.'));
+}
+
+const navBtnS=(off)=>({width:36,height:36,border:0,borderRadius:6,background:'rgba(255,255,255,.14)',color:'#fff',display:'flex',alignItems:'center',justifyContent:'center',flex:'none',cursor:off?'default':'pointer',opacity:off?.35:1});
 function PivotVerifier(){
   const [results,setResults]=useState([]);
   const [busy,setBusy]=useState(false);
@@ -3152,10 +3915,17 @@ function PivotVerifier(){
   const [showHelp,setShowHelp]=useState(false);
   const [busyMsg,setBusyMsg]=useState('Analyse du classeur…');
   const [filtered,setFiltered]=useState(null);
-  const [recapBrand,setRecapBrand]=useState('');
+  const [recapBrand,setRecapBrand]=useState(()=>prefGet('anaBrand',''));
   const [auto,setAuto]=useState(true);
   const [refreshing,setRefreshing]=useState(false);
-  const [tab,setTab]=useState('verif');
+  const [nav,setNav]=useState(['menu']);
+  const tab=nav[nav.length-1];
+  const [anaSub,setAnaSub]=useState(()=>prefGet('anaSub','tops'));
+  const [anaPl,setAnaPl]=useState(()=>prefGet('anaPl',''));
+  const subBack=useRef({});
+  useEffect(()=>{prefSet('anaSub',anaSub);},[anaSub]);
+  useEffect(()=>{prefSet('anaPl',anaPl);},[anaPl]);
+  useEffect(()=>{prefSet('anaBrand',recapBrand);},[recapBrand]);
   const prev=useRef(null);
   const [gi,setGi]=useState(-1);
 
@@ -3169,7 +3939,7 @@ function PivotVerifier(){
     try{
       const wb=await loadWorkbook();
       const dsn=wb.SheetNames.find(s=>s.toLowerCase()==='data');
-      if(!dsn&&!tabInit.current){tabInit.current=true;setTab('outils');}
+      tabInit.current=true;
       setInfo({sheets:EXP.map(ex=>({ex,found:!!wb.SheetNames.find(s=>s.toLowerCase()===ex.toLowerCase())})),rows:dsn?gR(wb.Sheets[dsn],2).length:0});
       ROWBUF.length=0;
       await new Promise(r=>setTimeout(r,0));
@@ -3209,6 +3979,10 @@ function PivotVerifier(){
     return ()=>{clearTimeout(timerRef.current);try{const ev=evRef.current;if(ev)Excel.run(ev.context,async(ctx)=>{ev.remove();await ctx.sync();});}catch(e){}};
   },[]);
   const toggleAuto=()=>{autoRef.current=!auto;setAuto(!auto);};
+  const go=(t)=>{setNav(n=>n[n.length-1]===t?n:n.concat([t]).slice(-14));if(t!=='menu')prefSet('lastTab',t);};
+  const goHome=()=>setNav(['menu']);
+  const goBack=()=>{const f=subBack.current[tab];if(f&&f())return;setNav(n=>n.length>1?n.slice(0,-1):n);};
+  const plSet=useMemo(()=>{const o={};(results.find(r=>r.id==='tops')||{items:[]}).items.forEach(x=>{o[x.p]=1;});return o;},[results]);
 
   const flip=(setter,k)=>setter(prevS=>{const n=new Set(prevS);n.has(k)?n.delete(k):n.add(k);return n;});
   const onSeen=(id,v)=>setAcked(p=>{const n=new Set(p);v?n.add(id):n.delete(id);return n;});
@@ -3250,6 +4024,9 @@ function PivotVerifier(){
   const infos=results.filter(r=>r.lv==='i'&&!['c27','c27b','recap','tops'].includes(r.id)),oks=results.filter(r=>r.lv==='ok');
   const tops=results.find(r=>r.id==='tops'),recap=results.find(r=>r.id==='recap');
   const nRes=Object.keys(resolved).length;
+  const anaBrandOn=!!(tops&&recapBrand&&tops.brandCols.indexOf(recapBrand)>=0),anaPlOn=!!(tops&&anaPl&&plSet[anaPl]);
+  const anaFilterOn=anaBrandOn||anaPlOn;
+  const anaBanner=[anaPlOn?'Plateforme : '+plName(anaPl):null,anaBrandOn?'Marque : '+recapBrand:null].filter(Boolean).join(' · ');
   const unionRows=(arr)=>[...new Set(arr.filter(r=>r.sec==='DATA').flatMap(r=>r.rows||[]).filter(x=>typeof x==='number'))];
   const rowsB=unionRows(bl),rowsAll=unionRows([...bl,...vf]);
   const recapOn=!!(recapBrand&&recap&&recap.brandCols&&recap.brandCols.indexOf(recapBrand)>=0);
@@ -3306,19 +4083,17 @@ function PivotVerifier(){
       h('div',{style:{marginTop:10,color:'#1e40af',background:'#eff6ff',borderRadius:8,padding:'6px 9px'}},'💡 Tout se passe dans Excel : aucune donnée n’est envoyée à un serveur.'),
       h('div',{style:{textAlign:'right',marginTop:10}},h('button',{style:BTN_N,onClick:()=>setShowHelp(false)},'Fermer'))),()=>setShowHelp(false)):null,
 
-    h('div',{style:{position:'sticky',top:0,zIndex:50,background:'#f0f4f8',padding:'.6rem 0 .5rem'}},
-      h('div',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',gap:6}},
-        h('h1',{style:{fontSize:'1rem',fontWeight:800,margin:0}},'🔍 Vérificateur Pivot'),
-        h('div',{style:{display:'flex',gap:5}},
+    h('div',{style:{position:'sticky',top:0,zIndex:50,background:'#f0f4f8',padding:'.5rem 0 .4rem'}},
+      h('div',{style:{display:'flex',alignItems:'center',gap:6,background:'#1e293b',color:'#fff',borderRadius:10,padding:'6px 8px'}},
+        h('button',{onClick:goBack,disabled:tab==='menu','aria-label':'Retour',title:'Retour',style:navBtnS(tab==='menu')},IC.back()),
+        h('button',{onClick:goHome,disabled:tab==='menu','aria-label':'Accueil',title:'Accueil',style:navBtnS(tab==='menu')},IC.home()),
+        h('div',{style:{flex:1,minWidth:0,fontSize:'.92rem',fontWeight:800,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',marginLeft:4}},TITLES[tab]),
+        (tab==='analyse'&&anaFilterOn)?h('span',{style:{background:'#dc2626',color:'#fff',fontSize:'.64rem',fontWeight:800,borderRadius:4,padding:'2px 7px',letterSpacing:'.04em',flex:'none'}},'FILTRÉ'):null,
+        tab==='verif'?h('span',{style:{display:'flex',gap:5,flex:'none'}},
           h('button',{style:BTN_B,disabled:busy,onClick:()=>run()},'↻ Relancer'),
           h('button',{style:BTN_N,title:'Copier le rapport',onClick:copyReport,disabled:!results.length},'📋'),
-          h('button',{style:BTN_N,onClick:()=>setShowHelp(true)},'❓'))),
-      h('div',{style:{display:'flex',gap:6,marginTop:7}},
-        h('button',{onClick:()=>setTab('maj'),style:{...btn(tab==='maj'?'#1e293b':'#fff',tab==='maj'?'#fff':'#334155','#1e293b'),flex:1}},'🔄 Mise à jour'),
-        h('button',{onClick:()=>setTab('verif'),style:{...btn(tab==='verif'?'#1e293b':'#fff',tab==='verif'?'#fff':'#334155','#1e293b'),flex:1}},'🔍 Vérifications'),
-        h('button',{onClick:()=>setTab('analyse'),style:{...btn(tab==='analyse'?'#1e293b':'#fff',tab==='analyse'?'#fff':'#334155','#1e293b'),flex:1}},'📈 Analyse'),
-        h('button',{onClick:()=>setTab('outils'),style:{...btn(tab==='outils'?'#1e293b':'#fff',tab==='outils'?'#fff':'#334155','#1e293b'),flex:1}},'🛠 Outils')),
-      (tab==='verif'||tab==='analyse')?h(LastActionBar,{onToast:setToast}):null,
+          h('button',{style:BTN_N,onClick:()=>setShowHelp(true)},'❓')):null),
+      (tab==='verif'||tab==='analyse'||tab==='formules')?h(LastActionBar,{onToast:setToast}):null,
       (results.length&&tab==='verif')?h('div',{style:{display:'flex',flexWrap:'wrap',gap:5,marginTop:7,alignItems:'center'}},
         chip('🔴 '+bl.length+' bloquant'+(bl.length>1?'s':''),bl.length?'#fee2e2':'#e2e8f0',bl.length?'#b91c1c':'#64748b'),
         chip('🟠 '+vf.length+' à vérifier',vf.length?'#fef3c7':'#e2e8f0',vf.length?'#b45309':'#64748b'),
@@ -3326,11 +4101,16 @@ function PivotVerifier(){
         nRes?chip('✓ '+nRes+' corrigé'+(nRes>1?'s':''),'#dbeafe','#1d4ed8'):null,
         runAt?h('span',{style:{fontSize:'.68rem',color:'#94a3b8'}},runAt.toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'})):null,
         refreshing?h('span',{style:{fontSize:'.68rem',color:'#2563eb'}},'⏳ mise à jour…'):null,
-        h('label',{style:{marginLeft:'auto',fontSize:'.7rem',color:'#475569',cursor:'pointer',whiteSpace:'nowrap'},title:'Relance l\'analyse quelques secondes après chaque modification du classeur'},h('input',{type:'checkbox',checked:auto,onChange:toggleAuto,style:{marginRight:4,verticalAlign:'middle'}}),'Relance auto')):null),
+        h('label',{style:{marginLeft:'auto',fontSize:'.7rem',color:'#475569',cursor:'pointer',whiteSpace:'nowrap'},title:'Relance l\'analyse quelques secondes après chaque modification du classeur'},h('input',{type:'checkbox',checked:auto,onChange:toggleAuto,style:{marginRight:4,verticalAlign:'middle'}}),'Relance auto')):null,
+      (tab==='analyse'&&anaFilterOn)?h('div',{style:{background:'#fef2f2',border:'1px solid #dc2626',color:'#b91c1c',borderRadius:6,padding:'5px 10px',fontSize:'.76rem',fontWeight:800,marginTop:7,lineHeight:1.4}},'FILTRÉ · '+anaBanner):null,
+      tab==='analyse'?h('div',{style:{display:'grid',gridTemplateColumns:'repeat(4,minmax(0,1fr))',gap:4,background:'#e2e8f0',borderRadius:8,padding:3,marginTop:7}},
+        [['tops','Tops'],['synth','Synthèse'],['evol','Évolution'],['more','Détails']].map(([k,l])=>h('button',{key:k,onClick:()=>setAnaSub(k),style:{border:0,borderRadius:6,padding:'7px 2px',fontSize:'.76rem',fontWeight:anaSub===k?800:600,background:anaSub===k?'#fff':'transparent',color:anaSub===k?'#1e293b':'#334155',cursor:'pointer',boxShadow:anaSub===k?'0 1px 2px rgba(0,0,0,.2)':'none'}},l))):null),
 
     err?h('div',{style:{background:'#fef2f2',border:'1px solid #fca5a5',color:'#b91c1c',borderRadius:8,padding:'.5rem .7rem',fontSize:'.8rem',marginBottom:8}},'⚠️ '+err):null,
     toast?h('div',{onClick:()=>setToast(''),style:{background:'#eff6ff',border:'1px solid #bfdbfe',color:'#1e40af',borderRadius:8,padding:'.45rem .7rem',fontSize:'.78rem',marginBottom:8,cursor:'pointer'}},toast):null,
 
+    h('div',{style:{display:tab==='menu'?'block':'none'}},h(MenuHome,{go})),
+    h('div',{style:{display:tab==='formules'?'block':'none'}},h(FormulasTab,{onToast:setToast})),
     h('div',{style:{display:tab==='verif'?'block':'none'}},
     info?h('div',{style:{background:'#fff',border:'1px solid #e2e8f0',borderRadius:9,padding:'.5rem .7rem',marginBottom:10,fontSize:'.77rem'}},
       h('span',null,h('strong',null,info.rows),' lignes dans DATA  '),
@@ -3356,9 +4136,9 @@ function PivotVerifier(){
 
       h(Group,{title:'ℹ️ Informations',accent:'#0369a1',count:infos.length,open:openG.has('i'),onToggle:()=>flip(setOpenG,'i')},infos.map(r=>cardFor(r,'i'))),
       h(Group,{title:'✅ Contrôles OK',accent:'#15803d',count:oks.length,open:openG.has('ok'),onToggle:()=>flip(setOpenG,'ok')},oks.map(r=>cardFor(r,'ok'))))),
-    h('div',{style:{display:tab==='analyse'?'block':'none'},onClick:onClickReport},h(AnalyseMemo,{tops,brand:recapBrand,onBrand:setRecapBrand,onToast:setToast})),
-    h('div',{style:{display:tab==='outils'?'block':'none'},onClick:onClickReport},h(GuidedTools,{onToast:setToast,onWritten:()=>{if(!(window.__realNames&&window.__realNames.DATA))return;quietRef.current=Date.now()+4000;setTimeout(()=>runRef.current&&runRef.current(undefined,true),600);}})),
-    h('div',{style:{display:tab==='maj'?'block':'none'},onClick:onClickReport},h(UpdateTab,{onToast:setToast,onWritten:()=>{if(!(window.__realNames&&window.__realNames.DATA))return;quietRef.current=Date.now()+4000;setTimeout(()=>runRef.current&&runRef.current(undefined,true),600);}})));
+    h('div',{style:{display:tab==='analyse'?'block':'none'},onClick:onClickReport},h(AnalyseMemo,{tops,brand:recapBrand,onBrand:setRecapBrand,onToast:setToast,pl:anaPl,onPl:setAnaPl,sub:anaSub})),
+    h('div',{style:{display:tab==='outils'?'block':'none'},onClick:onClickReport},h(GuidedTools,{onToast:setToast,regBack:(fn)=>{subBack.current.outils=fn;},onWritten:()=>{if(!(window.__realNames&&window.__realNames.DATA))return;quietRef.current=Date.now()+4000;setTimeout(()=>runRef.current&&runRef.current(undefined,true),600);}})),
+    h('div',{style:{display:tab==='maj'?'block':'none'},onClick:onClickReport},h(UpdateTab,{onToast:setToast,regBack:(fn)=>{subBack.current.maj=fn;},onWritten:()=>{if(!(window.__realNames&&window.__realNames.DATA))return;quietRef.current=Date.now()+4000;setTimeout(()=>runRef.current&&runRef.current(undefined,true),600);}})));
 }
 
 Office.onReady(()=>{ReactDOM.createRoot(document.getElementById('root')).render(h(PivotVerifier));});
