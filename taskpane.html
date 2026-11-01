@@ -394,7 +394,11 @@ function aExtra(wb,res){
     const detSet=new Set(detected.map(x=>x.c));
     const cand=detected.concat(headers.filter(x=>!detSet.has(x.c)));
     const isOn=(cell)=>{if(!cell||cell.v===undefined||cell.v===null||cell.v==='')return false;if(typeof cell.v==='number')return cell.v!==0;const s=String(cell.v).trim().toLowerCase();return !['','0','false','faux','non','no','-'].includes(s);};
-    const EQC=g('équivalent média','equivalent media'),DEPC=g('dépenses paid','depenses paid');
+    const emvAll=[];for(let c=m._mnC;c<=m._mxC;c++){const hh=m['_h'+c];if(!hh)continue;const l=hh.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim();if(/(^|[^a-z])emv([^a-z]|$)|equivalent media/.test(l))emvAll.push({c,name:hh,letter:colL(c)});}
+    let EQC=-1;
+    if(emvAll.length===1)EQC=emvAll[0].c;
+    else if(emvAll.length>1){const sv=prefGet('emvCol',null);const f=sv&&(emvAll.find(x=>x.name===sv.name&&x.letter===sv.letter)||emvAll.find(x=>x.name===sv.name));if(f)EQC=f.c;}
+    const DEPC=g('dépenses paid','depenses paid');
     const RTF=g('rt','is_retweet','isretweet','is retweet'),RTN=g('retweets','retweet count','nb retweets'),QTN=g('quotes','quote count','nb quotes','citations');
     const tN=wb.SheetNames.find(n=>n.toLowerCase()==='tableaux');const b2=tN?cs(wb.Sheets[tN]['B2']):null;
     // colonnes « catégorielles » (≤ 60 valeurs distinctes) utilisables pour définir une période
@@ -423,7 +427,7 @@ function aExtra(wb,res){
     }
     const brandCols=cand.map(k=>k.name),brandDetected=detected.map(x=>x.name);
     res.push({sec:'RECAP',id:'recap',st:'i',lb:'Récapitulatif',msg:'',recap:Object.values(mp),brandCols,brandDetected,hasVis:VISC!==-1,rows:[]});
-    res.push({sec:'TOPS',id:'tops',st:'i',lb:'Tops',msg:'',items,brandCols,brandDetected,hasSOA:SOAC!==-1,hasRT:RTF!==-1,hasXn:RTN!==-1||QTN!==-1||CMC!==-1,hasVis:VISC!==-1,hasEq:EQC!==-1,hasDep:DEPC!==-1,hasDate:DC!==-1,cats:cats.map(k=>({name:k.name,base:k.base,values:k.values})),b2,rows:[]});
+    res.push({sec:'TOPS',id:'tops',st:'i',lb:'Tops',msg:'',items,brandCols,brandDetected,hasSOA:SOAC!==-1,hasRT:RTF!==-1,hasXn:RTN!==-1||QTN!==-1||CMC!==-1,hasVis:VISC!==-1,hasEq:EQC!==-1,emvCols:emvAll.map(x=>({name:x.name,letter:x.letter})),emvSel:EQC!==-1?{name:m['_h'+EQC],letter:colL(EQC)}:null,hasDep:DEPC!==-1,hasDate:DC!==-1,cats:cats.map(k=>({name:k.name,base:k.base,values:k.values})),b2,rows:[]});
   }
 }
 
@@ -947,7 +951,7 @@ function evalSpec(s,d){
 const fmtFV=(v)=>{if(v===null||v===undefined)return '—';if(v==='')return '(vide)';if(typeof v==='number')return (Math.abs(v)>=1000||Number.isInteger(v)?Math.round(v*10000)/10000:Math.round(v*10000)/10000).toLocaleString('fr-FR',{maximumFractionDigits:4}).replace(/[  ]/g,' ');return String(v);};
 
 function AnalyseTab(p){
-  const {tops,brand,onBrand,onToast,pl,onPl,sub}=p;
+  const {tops,brand,onBrand,onToast,pl,onPl,sub,onEmv}=p;
   const [mode,setMode]=useState('col');
   const [col,setCol]=useState('');
   const [va,setVa]=useState('');
@@ -1071,6 +1075,10 @@ function AnalyseTab(p){
       h('div',{style:{flex:1,minWidth:0,fontSize:'.76rem',color:'#334155',lineHeight:1.45}},'Scope d\'analyse : ',h('strong',null,labA),hasB?[' · comparée à ',h('strong',{key:'b'},labB)]:' · sans comparaison',' — '+fI(A.n)+' posts'+(hasB?' / '+fI(B.n):'')),
       h('button',{style:BTN_N,onClick:()=>setEditP(!editP)},editP?'Fermer':'Modifier'),
       h('button',{style:BTN_B,onClick:doExport,title:'Crée une nouvelle feuille avec tous les tableaux de cet onglet'},'📤')),
+    (tops.emvCols&&tops.emvCols.length>1)?h('div',{style:{marginTop:6,background:tops.emvSel?'#f1f5f9':'#fef3c7',border:'1px solid '+(tops.emvSel?'#cbd5e1':'#f59e0b'),borderRadius:6,padding:'5px 8px',fontSize:'.74rem',color:tops.emvSel?'#334155':'#92400e'}},
+      h('div',{style:{marginBottom:3}},tops.emvSel?'Colonne EMV utilisée (modifiable) :':'Plusieurs colonnes EMV détectées (brut, net…) : choisissez celle à utiliser pour l\'analyse.'),
+      h('select',{value:tops.emvSel?String(tops.emvCols.findIndex(x=>x.name===tops.emvSel.name&&x.letter===tops.emvSel.letter)):'',onChange:e=>{const i=e.target.value;if(i!==''&&onEmv)onEmv(tops.emvCols[+i]);},style:{width:'100%',fontSize:'.74rem',padding:'3px'}},
+        h('option',{value:''},'— choisir —'),tops.emvCols.map((x,i)=>h('option',{key:i,value:String(i)},'['+x.letter+'] '+x.name)))):null,
     tops.hasXn?h('label',{style:{display:'flex',alignItems:'flex-start',gap:6,marginTop:6,fontSize:'.74rem',color:'#334155',lineHeight:1.4,cursor:'pointer'}},h('input',{type:'checkbox',checked:cRT,onChange:e=>setCRT(e.target.checked),style:{marginTop:2}}),h('span',null,'Compter les retweets, quotes et replies (commentaires) générés sur les tweets comme des contenus',cRT?h('strong',{style:{color:'#b91c1c'}},' (activé)'):null)):null,
     tops.hasRT?h('div',{style:{marginTop:4,fontSize:'.68rem',color:'#64748b'}},'Les lignes marquées retweet (RT / is_retweet) comptent comme posts, mais leurs engagements, visibilité et EMV sont toujours ignorés.'):null,
     editP?h('div',{style:{marginTop:8,borderTop:'1px solid #e2e8f0',paddingTop:8}},
@@ -2609,13 +2617,14 @@ async function appendLog(sheetName,lot,cells,hdr,meta){
     const ws=await openLog(ctx);
     const ur=ws.getUsedRangeOrNullObject(true);ur.load('rowCount,isNullObject');await ctx.sync();
     const start=ur.isNullObject?1:ur.rowCount;
-    for(let i=0;i<out.length;i+=5000){
-      const part=out.slice(i,i+5000);
+    for(let i=0;i<out.length;i+=2500){
+      const part=out.slice(i,i+2500);
       ws.getRangeByIndexes(start+i,6,part.length,2).numberFormat='@';
       ws.getRangeByIndexes(start+i,0,part.length,9).values=part;await ctx.sync();
+      if(window.__logProg)try{window.__logProg(Math.min(i+2500,out.length),out.length);}catch(e){}
     }
   });
-  LOGBUS.bump();
+  window.__logProg=null;LOGBUS.bump();
 }
 async function readLastBatch(){
   return Excel.run(async(ctx)=>{
@@ -2818,7 +2827,7 @@ function UpdateTab(p){
     try{
       const collect=[];
       const r=await withManualCalc(()=>writeChanges(plan.sheet,plan.writes,(a,b)=>setProg('Écriture '+fr(a)+' / '+fr(b)+'…'),collect));
-      setProg('Journal…');
+      setProg('Journal…');window.__logProg=(a,b)=>setProg('Journal : '+fmtN(a)+' / '+fmtN(b)+' lignes…');
       const lot=nowStr();let logErr='';
       const L=plan.res.lines,S0=plan.res.summary;
       const meta={tool:'Mise à jour Apify',summary:'Périmètre : '+plan.scopeLabel+' · exports : '+okFiles.map(f=>f.name.replace(/^[0-9a-f]{8}-/,'')+' ('+(PLAT_LABEL[f.platform]||f.platform)+', '+f.records.length+')').join(' ; ')+' · '+plan.counts.rowsTouched+' lignes et '+r.n+' cellules modifiées · '+L.filter(l=>l.flags.some(f=>f.indexOf('baisse_')===0)).length+' baisses ignorées · '+S0.non_trouve+' non retrouvées'};
@@ -2847,7 +2856,7 @@ function UpdateTab(p){
   const big={padding:'9px 14px',fontSize:'.84rem'};
   const td={padding:'3px 5px',borderBottom:'1px solid #f1f5f9',verticalAlign:'top',fontSize:'.72rem'};
   const spin=busy?h('span',{style:{display:'inline-block',width:12,height:12,border:'2px solid #cbd5e1',borderTopColor:'#2563eb',borderRadius:'50%',animation:'spin .8s linear infinite',marginRight:6,verticalAlign:'-2px'}}):null;
-  const status=busy?h('div',{style:{fontSize:'.76rem',color:'#475569',marginTop:8}},spin,prog||'En cours…'):null;
+  const status=busy?h('div',{style:{fontSize:'.78rem',color:'#334155',marginTop:8,background:'#eff6ff',border:'1px solid #bfdbfe',borderRadius:6,padding:'6px 9px'}},h('div',{style:{fontWeight:700}},spin,'Traitement en cours, patientez…'),prog?h('div',{style:{marginTop:2,color:'#475569'}},prog):null):null;
   const errBox=err?h('div',{style:{background:'#fef2f2',border:'1px solid #fecaca',color:'#b91c1c',borderRadius:6,padding:'6px 9px',fontSize:'.76rem',marginTop:8}},err):null;
   const stepsBar=h('div',{style:{display:'flex',gap:4,marginBottom:10,fontSize:'.7rem',fontWeight:700}},
     [['files','1 · Fichiers'],['scope','2 · Lignes'],['review','3 · Vérifier']].map(([k,l],i)=>{
@@ -3362,10 +3371,12 @@ function GuidedTools(p){
       else setCounts(await countToolScopes());
     }catch(e){}
   };
-  const loadCols=async(k)=>{
+  const loadCols=async(k,auto)=>{
     const names=k==='username'?['username','author username','author_username','compte','account','pseudo','handle']:['post_id','id post','id_post','id','ids'];
     try{const r=await sheetCols();setCols(r);
-      setTcol((cur)=>{if(cur!==null&&r.cols.some(x=>x.c===cur))return cur;const g=r.cols.find(x=>names.indexOf(x.name.toLowerCase().replace(/[_]+/g,' '))>=0||names.indexOf(x.name.toLowerCase())>=0);return g?g.c:null;});
+      const gf=r.cols.find(x=>names.indexOf(x.name.toLowerCase().replace(/[_]+/g,' '))>=0||names.indexOf(x.name.toLowerCase())>=0);
+      if(auto&&gf)setMode('fill');
+      setTcol((cur)=>{if(cur!==null&&r.cols.some(x=>x.c===cur))return cur;return gf?gf.c:null;});
     }catch(e){setErr(msg(e));}
   };
   const initDedup=async()=>{
@@ -3390,7 +3401,7 @@ function GuidedTools(p){
     setTool(k);setErr('');setPlan(null);setMode(k==='profurl'?'inplace':'newcol');setStep('setup');setBusy('x');
     try{
       if(k==='dedup')await initDedup();
-      else{await recount(k);if(k==='ids'||k==='username')await loadCols(k);}
+      else{await recount(k);if(k==='ids'||k==='username')await loadCols(k,true);}
     }catch(e){setErr(msg(e));}
     setBusy('');};
   const analyse=async()=>{
@@ -3421,7 +3432,7 @@ function GuidedTools(p){
     try{
       const collect=[];
       const r=await withManualCalc(()=>writeChanges(plan.sheet,plan.changes,(a,b)=>setProg('Écriture '+fmtN(a)+' / '+fmtN(b)+'…'),collect));
-      setProg('Journal…');const lot=nowStr();let logErr='';
+      setProg('Journal…');window.__logProg=(a,b)=>setProg('Journal : '+fmtN(a)+' / '+fmtN(b)+' lignes…');const lot=nowStr();let logErr='';
       const scopeLbl=tool==='dedup'?'lignes ('+(ddScope==='all'?'toutes':ddScope==='visible'?'visibles':'sélection')+')':scope==='selection'?'sélection':scope==='visible'?'sélection (lignes visibles)':'colonnes entières';
       try{await appendLog(plan.sheet,lot,collect,{},{tool:T.t,summary:'Périmètre : '+scopeLbl+' · '+r.n+' cellule'+pl(r.n,'')+' modifiée'+pl(r.n,'')+(r.skipped?' · '+r.skipped+' non touchée'+pl(r.skipped,''):'')+(plan.bad&&plan.bad.length?' · '+plan.bad.length+' '+(plan.badLabel||'sans ID'):'')});}catch(e){logErr=msg(e);}
       setDone({n:r.n,skipped:r.skipped,logErr});setStep('done');
@@ -3434,7 +3445,7 @@ function GuidedTools(p){
   const td={padding:'3px 5px',borderBottom:'1px solid #f1f5f9',verticalAlign:'top',fontSize:'.72rem'};
   const rowS={display:'flex',alignItems:'center',gap:6,flexWrap:'wrap',marginBottom:6,fontSize:'.75rem'};
   const spin=busy?h('span',{style:{display:'inline-block',width:12,height:12,border:'2px solid #cbd5e1',borderTopColor:'#2563eb',borderRadius:'50%',animation:'spin .8s linear infinite',marginRight:6,verticalAlign:'-2px'}}):null;
-  const status=busy&&busy!=='x'?h('div',{style:{fontSize:'.76rem',color:'#475569',marginTop:8}},spin,prog||'En cours…'):null;
+  const status=busy&&busy!=='x'?h('div',{style:{fontSize:'.78rem',color:'#334155',marginTop:8,background:'#eff6ff',border:'1px solid #bfdbfe',borderRadius:6,padding:'6px 9px'}},h('div',{style:{fontWeight:700}},spin,'Traitement en cours, patientez…'),prog?h('div',{style:{marginTop:2,color:'#475569'}},prog):null):null;
   const errBox=err?h('div',{style:{background:'#fef2f2',border:'1px solid #fecaca',color:'#b91c1c',borderRadius:6,padding:'6px 9px',fontSize:'.76rem',marginTop:8}},err):null;
   const selCard=(on)=>({border:'2px solid '+(on?'#2563eb':'#e2e8f0'),background:on?'#eff6ff':'#fff',borderRadius:8,padding:'8px 10px',marginBottom:6,cursor:'pointer'});
 
@@ -3850,7 +3861,7 @@ function FormulasTab(p){
     const t=setTimeout(async()=>{
       const e=specError(spec);
       if(e){setPrev({incomplete:e});return;}
-      if(!target){setPrev({incomplete:'Cliquez sur « Utiliser la cellule sélectionnée » pour indiquer où écrire la formule.'});return;}
+      if(!target){setPrev({incomplete:'Sélectionnez dans Excel la cellule où la formule doit apparaître, puis cliquez sur le bouton ci-dessous.',needTarget:true});return;}
       if(!info||info.sheet!==spec.src){return;}
       try{
         const fr=buildFormula(spec,0,0,target.sheet,true),en=buildFormula(spec,0,0,target.sheet,false);
@@ -3885,7 +3896,7 @@ function FormulasTab(p){
       for(let i=0;i<R;i++)for(let j=0;j<C;j++)cells.push({r:target.r+i,c:target.c+j,formula:buildFormula(spec,i,j,target.sheet,false),expect:'any'});
       const collect=[];
       const r=await withManualCalc(()=>writeChanges(target.sheet,cells,(a,b)=>setProg('Écriture '+fmtN(a)+' / '+fmtN(b)+'…'),collect));
-      setProg('Journal…');
+      setProg('Journal…');window.__logProg=(a,b)=>setProg('Journal : '+fmtN(a)+' / '+fmtN(b)+' lignes…');
       if(collect.length){ /* on relit la formule réellement stockée par Excel, pour que l'annulation la reconnaisse */
         await Excel.run(async(ctx)=>{
           const ws=ctx.workbook.worksheets.getItem(target.sheet);
@@ -3930,7 +3941,7 @@ function FormulasTab(p){
   const resBox=h('div',{style:{...box,borderColor:'#94a3b8'}},
     h('div',{style:{fontSize:'.66rem',fontWeight:800,letterSpacing:'.06em',textTransform:'uppercase',color:'#475569'}},'Aperçu'+(target?' pour '+addrOf(target.sheet,target.r,target.c):'')),
     !pv?h('div',{style:{fontSize:'.78rem',color:'#64748b',marginTop:4}},'Complétez la phrase ci-dessus.'):
-    pv.incomplete?h('div',{style:{fontSize:'.78rem',color:'#64748b',marginTop:4}},pv.incomplete):
+    pv.incomplete?h('div',{style:{fontSize:'.78rem',color:'#64748b',marginTop:4}},pv.incomplete,pv.needTarget?h('div',{style:{marginTop:6}},h('button',{style:BTN_B,onClick:takeTarget},'📍 Utiliser la cellule sélectionnée')):null):
     pv.error?h('div',{style:{fontSize:'.78rem',color:'#b91c1c',marginTop:4}},pv.error):
     h('div',null,
       h('div',{style:{fontSize:'1.55rem',fontWeight:800,marginTop:2,color:pv.res.miss?'#b45309':'#1e293b'}},pv.res.miss?(nf==='dash'&&kind==='lookup'?'—':nf==='zero'&&kind==='lookup'?'0':nf==='blank'&&kind==='lookup'?'(vide)':'#N/A'):fmtFV(pv.res.value)),
@@ -4021,7 +4032,8 @@ function gDetect(cols){
   const m={plat:f(/^(plateforme|platform|social[ _]?media|reseau|network|canal|channel)/),url:f(/^(url|post[ _]?url|permalink|link|lien)/),
     date:f(/^(date|created|publi|posted|jour|day)/),acc:f(/^(compte|account|page|author|auteur|profil|username|nom)/),
     type:f(/owned|paid|earned/,/^type/),vis:f(/^visibilit/,/^impression/,/^(reach|portee)/,/^(vues|views|video views|view count|nombre de vues)/),
-    engTotal:f(/^(social actions|engagements?|interactions?|total eng)/),eq:f(/equivalent media|^emv/),dep:f(/depenses paid|^(spend|cost|budget)/)};
+    engTotal:f(/^(social actions|engagements?|interactions?|total eng)/),eq:null,dep:f(/depenses paid|^(spend|cost|budget)/)};
+  {const emvs=cols.filter(x=>/(^|[^a-z])emv([^a-z]|$)|equivalent media/.test(gNorm(x.name)));m.eq=emvs.length===1?emvs[0].c:null;m.emvMulti=emvs.length>1;}
   m.engParts=m.engTotal!=null?[]:cols.filter(x=>/^(likes?|reactions?|comments?|commentaires?|shares?|partages?|saves?|enregistrements?|retweets?|quotes?)$/.test(gNorm(x.name))).map(x=>x.c);
   m.engMode=m.engTotal!=null?'total':(m.engParts.length?'sum':'total');
   return m;
@@ -4142,6 +4154,7 @@ function GenericSetup(p){
               h('input',{type:'checkbox',checked:(map.engParts||[]).indexOf(o.c)>=0,onChange:e=>set('engParts',e.target.checked?(map.engParts||[]).concat([o.c]):(map.engParts||[]).filter(x=>x!==o.c))}),'['+o.letter+'] '+o.name))),
         noEng?h('div',{style:{background:'#fef3c7',border:'1px solid #f59e0b',borderRadius:6,padding:'4px 8px',marginBottom:6,color:'#92400e'}},'Il faut une colonne qui contient les engagements, ou cocher les colonnes à additionner (likes, commentaires, partages…).'):null,
         row('Équivalent média',sel(map.eq,(v)=>set('eq',v))),
+        (map.emvMulti&&map.eq==null)?h('div',{style:{background:'#fef3c7',border:'1px solid #f59e0b',borderRadius:6,padding:'4px 8px',marginBottom:6,color:'#92400e'}},'Plusieurs colonnes EMV détectées (brut, net…) : choisissez celle à utiliser.'):null,
         row('Dépenses paid',sel(map.dep,(v)=>set('dep',v))),
         h('button',{style:{...BTN_B,width:'100%',padding:'8px',marginTop:4,opacity:(busy||noEng)?.5:1},disabled:!!busy||!!noEng,onClick:run},busy||'Analyser cet onglet'),
         h('div',{style:{fontSize:'.68rem',color:'#64748b',marginTop:5}},'Les colonnes choisies sont mémorisées (jamais les données). Si la plateforme n\'est pas dans une colonne, elle est déduite du domaine de l\'URL.')):null));
@@ -4211,7 +4224,7 @@ function PivotVerifier(){
         setNewIds(new Set([...cur].filter(id=>!pv.ids.has(id))));
       }else setNewIds(new Set());
       prev.current={ids:cur,labels:Object.fromEntries(norm.filter(r=>cur.has(r.id)).map(r=>[r.id,r.lb]))};
-      setResults(norm);setRunAt(new Date());setStale(false);
+      setResults(norm);setRunAt(new Date());setStale(false);if(!norm.some(r=>r.id==='tops')&&prefGet('anaSrc',null)===null)setAnaSrcS('other');
     }catch(e){
       setErr("Impossible de lire le classeur : "+(e&&e.message?e.message:e)+" — ce volet doit être ouvert depuis Excel.");
     }
@@ -4400,7 +4413,7 @@ function PivotVerifier(){
         [['pivot','Pivot (onglet DATA)'],['other','Autre onglet']].map(([k,l])=>h('button',{key:k,onClick:()=>setAnaSrc(k),style:{flex:1,padding:'5px 4px',fontSize:'.74rem',fontWeight:700,cursor:'pointer',borderRadius:6,border:'1px solid '+(anaSrc===k?'#1e293b':'#94a3b8'),background:anaSrc===k?'#1e293b':'#fff',color:anaSrc===k?'#fff':'#1e293b'}},l))),
       anaSrc==='pivot'&&!topsP&&results.length?h('div',{style:{fontSize:'.74rem',color:'#92400e',background:'#fef3c7',border:'1px solid #f59e0b',borderRadius:6,padding:'4px 8px',marginBottom:6}},'Aucun onglet DATA reconnu : choisissez « Autre onglet » pour analyser un autre fichier.'):null,
       anaSrc==='other'?h(ErrBox,{label:'La lecture de l\'onglet'},h(GenericSetup,{onBuilt:(t)=>{setGenTops(t);setGenVer(v=>v+1);},hook:genHook,onToast:setToast,built:!!genTops})):null,
-      (anaSrc==='pivot'||genTops)?h(ErrBox,{key:anaSrc+genVer,label:'L\'onglet Analyse'},h(AnalyseMemo,{key:anaSrc+genVer,tops,brand:anaSrc==='other'?'':recapBrand,onBrand:setRecapBrand,onToast:setToast,pl:anaPl,onPl:setAnaPl,sub:anaSub})):null),
+      (anaSrc==='pivot'||genTops)?h(ErrBox,{key:anaSrc+genVer,label:'L\'onglet Analyse'},h(AnalyseMemo,{key:anaSrc+genVer,tops,onEmv:(v)=>{prefSet('emvCol',v);run(undefined,true);},brand:anaSrc==='other'?'':recapBrand,onBrand:setRecapBrand,onToast:setToast,pl:anaPl,onPl:setAnaPl,sub:anaSub})):null),
     h('div',{style:{display:tab==='outils'?'block':'none'},onClick:onClickReport},h(GuidedTools,{onToast:setToast,regBack:(fn)=>{subBack.current.outils=fn;},onWritten:()=>{if(!(window.__realNames&&window.__realNames.DATA))return;quietRef.current=Date.now()+4000;setTimeout(()=>runRef.current&&runRef.current(undefined,true),600);}})),
     h('div',{style:{display:tab==='maj'?'block':'none'},onClick:onClickReport},h(UpdateTab,{onToast:setToast,regBack:(fn)=>{subBack.current.maj=fn;},onWritten:()=>{if(!(window.__realNames&&window.__realNames.DATA))return;quietRef.current=Date.now()+4000;setTimeout(()=>runRef.current&&runRef.current(undefined,true),600);}})));
 }
