@@ -3701,6 +3701,21 @@ function RecapRows(p){
 }
 
 const AnalyseMemo=(React.memo||((f)=>f))(AnalyseTab);
+class ErrBox extends React.Component{
+  constructor(p){super(p);this.state={e:null};}
+  static getDerivedStateFromError(e){return {e};}
+  componentDidCatch(e,i){try{console.error(e,i);}catch(x){}}
+  render(){
+    const e=this.state.e;if(!e)return this.props.children;
+    const txt=String(e&&e.stack?e.stack:e).slice(0,1200);
+    return h('div',{style:{background:'#fef2f2',border:'1px solid #fca5a5',borderRadius:8,padding:'10px',margin:'8px 0',fontSize:'.76rem',color:'#7f1d1d'}},
+      h('div',{style:{fontWeight:800,marginBottom:4}},(this.props.label||'Cet écran')+' a rencontré une erreur'),
+      h('div',{style:{marginBottom:6}},'Copiez le texte ci-dessous et envoyez-le pour correction (il ne contient pas de données du fichier).'),
+      h('textarea',{readOnly:true,value:txt,style:{width:'100%',height:110,fontSize:'.68rem',fontFamily:'monospace'},onFocus:(ev)=>ev.target.select()}),
+      h('button',{style:{marginTop:6,padding:'4px 10px',cursor:'pointer'},onClick:()=>this.setState({e:null})},'Réessayer'));
+  }
+}
+
 /* ═════════ Onglet Formules (interface) ═════════ */
 async function readFCols(sheet,cols,fromRow){
   return Excel.run(async(ctx)=>{
@@ -4175,12 +4190,12 @@ function PivotVerifier(){
 
       h(Group,{title:'ℹ️ Informations',accent:'#0369a1',count:infos.length,open:openG.has('i'),onToggle:()=>flip(setOpenG,'i')},infos.map(r=>cardFor(r,'i'))),
       h(Group,{title:'✅ Contrôles OK',accent:'#15803d',count:oks.length,open:openG.has('ok'),onToggle:()=>flip(setOpenG,'ok')},oks.map(r=>cardFor(r,'ok'))))),
-    h('div',{style:{display:tab==='analyse'?'block':'none'},onClick:onClickReport},h(AnalyseMemo,{tops,brand:recapBrand,onBrand:setRecapBrand,onToast:setToast,pl:anaPl,onPl:setAnaPl,sub:anaSub})),
+    h('div',{style:{display:tab==='analyse'?'block':'none'},onClick:onClickReport},h(ErrBox,{label:'L\'onglet Analyse'},h(AnalyseMemo,{tops,brand:recapBrand,onBrand:setRecapBrand,onToast:setToast,pl:anaPl,onPl:setAnaPl,sub:anaSub}))),
     h('div',{style:{display:tab==='outils'?'block':'none'},onClick:onClickReport},h(GuidedTools,{onToast:setToast,regBack:(fn)=>{subBack.current.outils=fn;},onWritten:()=>{if(!(window.__realNames&&window.__realNames.DATA))return;quietRef.current=Date.now()+4000;setTimeout(()=>runRef.current&&runRef.current(undefined,true),600);}})),
     h('div',{style:{display:tab==='maj'?'block':'none'},onClick:onClickReport},h(UpdateTab,{onToast:setToast,regBack:(fn)=>{subBack.current.maj=fn;},onWritten:()=>{if(!(window.__realNames&&window.__realNames.DATA))return;quietRef.current=Date.now()+4000;setTimeout(()=>runRef.current&&runRef.current(undefined,true),600);}})));
 }
 
-Office.onReady(()=>{ReactDOM.createRoot(document.getElementById('root')).render(h(PivotVerifier));});
+Office.onReady(()=>{ReactDOM.createRoot(document.getElementById('root')).render(h(ErrBox,{label:'L\'extension'},h(PivotVerifier)));});
 
   </script>
 </body>
