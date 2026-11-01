@@ -2390,6 +2390,7 @@ function autoMap(cols){
     map[k]=null;
     for(const a of GEN_ALIASES[k]){const c=cols.find(x=>!used.has(x.c)&&normHdr(x.name)===a);if(c){map[k]=c.c;used.add(c.c);break;}}
   }
+  if(map.url==null){const c=cols.find(x=>!used.has(x.c)&&/(^| )(url|lien|link|permalink)( |$)/.test(normHdr(x.name)));if(c){map.url=c.c;used.add(c.c);}}
   return map;
 }
 async function readSheetCols(sheetName){
@@ -3385,7 +3386,7 @@ function GuidedTools(p){
   const initDedup=async()=>{
     const g=await readSheetCols();
     const find=(nm)=>{const x=g.cols.find(c=>nm.indexOf(normHdr(c.name))>=0);return x?x.c:null;};
-    const d={gi:g,keyC:find(['url','url compte','url profil','profil','compte','username','author username','account','account url','lien','link']),platC:find(['plateforme','platform','social media','reseau','reseau social']),markC:find([normHdr(DUP_HEAD)])};
+    const d={gi:g,keyC:(()=>{const k=find(['url','url compte','url profil','profil','compte','username','author username','account','account url','lien','link']);if(k!=null)return k;const x=g.cols.find(c=>/(^| )(url|lien|link)( |$)/.test(normHdr(c.name)));return x?x.c:null;})(),platC:find(['plateforme','platform','social media','reseau','reseau social']),markC:find([normHdr(DUP_HEAD)])};
     setDd(d);setDdScope('all');setDdCounts(null);
     if(d.keyC!=null)setDdCounts(await countScopes(g.sheet,d.keyC,g.headerRow+1));
   };
@@ -4032,13 +4033,14 @@ const gDate=(v)=>{
   if((m=/^(\d{4})-(\d{2})-(\d{2})/.exec(s)))return Math.floor(Date.UTC(+m[1],+m[2]-1,+m[3])/86400000+25569);
   if((m=/^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{2,4})/.exec(s))){const y=+m[3]<100?2000+ +m[3]:+m[3];return Math.floor(Date.UTC(y,+m[2]-1,+m[1])/86400000+25569);}
   return null;};
-function gDetect(cols){
+function gDetect(cols,sample){
   const f=(...res)=>{for(const re of res){const c=cols.find(x=>re.test(gNorm(x.name)));if(c)return c.c;}return null;};
-  const m={plat:f(/^(plateforme|platform|social[ _]?media|reseau|network|canal|channel)/),url:f(/^(url|post[ _]?url|permalink|link|lien)/),
+  const m={plat:f(/^(plateforme|platform|social[ _]?media|reseau|network|canal|channel)/),url:f(/^(url|post[ _]?url|permalink|link|lien)/,/(^|[^a-z])(url|lien|link|permalink)([^a-z]|$)/),
     date:f(/^(date|created|publi|posted|jour|day)/),acc:f(/^(compte|account|page|author|auteur|profil|username|nom)/),
     type:f(/owned|paid|earned/,/^type/),vis:f(/^visibilit/,/^impression/,/^(reach|portee)/,/^(vues|views|video views|view count|nombre de vues)/),
     engTotal:f(/^(social actions|engagements?|interactions?|total eng)/),eq:null,dep:f(/depenses paid|^(spend|cost|budget)/)};
   {const emvs=cols.filter(x=>/(^|[^a-z])emv([^a-z]|$)|equivalent media/.test(gNorm(x.name)));m.eq=emvs.length===1?emvs[0].c:null;m.emvMulti=emvs.length>1;}
+  if(m.url==null&&sample){const hit=cols.find(x=>{const v=(sample[x.c]||[]).filter(t=>t!==''&&t!==null);return v.length>=2&&v.filter(t=>/^https?:\/\//i.test(String(t).trim())).length/v.length>=0.6;});if(hit)m.url=hit.c;}
   m.engParts=m.engTotal!=null?[]:cols.filter(x=>/^(likes?|reactions?|comments?|commentaires?|shares?|partages?|saves?|enregistrements?|retweets?|quotes?)$/.test(gNorm(x.name))).map(x=>x.c);
   m.engMode=m.engTotal!=null?'total':(m.engParts.length?'sum':'total');
   return m;
@@ -4051,8 +4053,10 @@ async function gReadHeaders(sheetName,headerRow){
     if(ur.isNullObject)throw new Error('La feuille « '+name+' » est vide.');
     const hr1=headerRow||ur.rowIndex+1;
     if(hr1<ur.rowIndex+1||hr1>ur.rowIndex+ur.rowCount)throw new Error('Cette ligne d\'en-têtes est en dehors des données de la feuille.');
-    const hr=sh.getRangeByIndexes(hr1-1,ur.columnIndex,1,ur.columnCount);hr.load('values');await ctx.sync();
-    return {sheet:name,sheets:wl.items.map(s=>s.name),headerRow:hr1,lastRow:ur.rowIndex+ur.rowCount,c0:ur.columnIndex,
+    const hr=sh.getRangeByIndexes(hr1-1,ur.columnIndex,1,ur.columnCount);hr.load('values');
+    const ns=Math.max(0,Math.min(30,ur.rowIndex+ur.rowCount-hr1));const sr=ns?sh.getRangeByIndexes(hr1,ur.columnIndex,ns,ur.columnCount):null;if(sr)sr.load('values');await ctx.sync();
+    const sample={};if(sr)for(let j=0;j<ur.columnCount;j++){sample[ur.columnIndex+j]=sr.values.map(rw=>rw[j]);}
+    return {sample,sheet:name,sheets:wl.items.map(s=>s.name),headerRow:hr1,lastRow:ur.rowIndex+ur.rowCount,c0:ur.columnIndex,
       cols:hr.values[0].map((v,i)=>({c:ur.columnIndex+i,letter:colL(ur.columnIndex+i),name:String(v==null?'':v).trim()})).filter(x=>x.name!=='')};
   });
 }
@@ -4108,7 +4112,7 @@ function GenericSetup(p){
     try{
       const r=await gReadHeaders(sheet,hr);const sv=prefGet('anaGen',null);
       const okSv=sv&&sv.sheet===r.sheet&&sv.headerRow===r.headerRow&&sv.map;
-      setInfo(r);setHrow(String(r.headerRow));setMap(okSv?sv.map:gDetect(r.cols));
+      setInfo(r);setHrow(String(r.headerRow));setMap(okSv?sv.map:gDetect(r.cols,r.sample));
     }catch(e){setErr(msg(e));}
   };
   useEffect(()=>{const sv=prefGet('anaGen',null);load(sv&&sv.sheet,sv&&sv.headerRow);},[]);
