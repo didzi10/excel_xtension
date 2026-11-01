@@ -405,7 +405,8 @@ function aExtra(wb,res){
       for(const r of rows){const cell=r.d[c];if(!cell||cell.v===undefined||cell.v===null||cell.v==='')continue;const key=cell.t==='n'?String(cell.v):String(cell.v).trim();if(!key)continue;if(!cm.has(key)){if(cm.size>=60){ok=false;break;}cm.set(key,cm.size);}}
       if(ok&&cm.size>=1)cats.push({name,c,map:cm,values:[...cm.keys()]});
     }
-    cats.sort((a,b)=>{const pa=PRI.indexOf(a.name.toLowerCase()),pb=PRI.indexOf(b.name.toLowerCase());return (pa<0?99:pa)-(pb<0?99:pb);});
+    {const cnt={};cats.forEach(k=>{const l=k.name.toLowerCase().trim();cnt[l]=(cnt[l]||0)+1;});cats.forEach(k=>{k.base=k.name;if(cnt[k.name.toLowerCase().trim()]>1)k.name=k.name+' (col. '+colL(k.c)+')';});}
+    cats.sort((a,b)=>{const pa=PRI.indexOf((a.base||a.name).toLowerCase()),pb=PRI.indexOf((b.base||b.name).toLowerCase());return (pa<0?99:pa)-(pb<0?99:pb);});
     const mkOf=(s)=>{if(typeof s!=='number'||s<20000||s>80000)return null;return new Date(Math.round((s-25569)*86400000)).toISOString().slice(0,7);};
     const mp={},items=[];
     for(const r of rows){
@@ -418,11 +419,11 @@ function aExtra(wb,res){
       const eng=isRT?0:SOAC!==-1?(so||0):((LKC!==-1?cn(r.d[LKC])||0:0)+(CMC!==-1?cn(r.d[CMC])||0:0));
       const dcell=DC!==-1?r.d[DC]:null;const d=dcell&&typeof dcell.v==='number'?dcell.v:null;
       const cc=cats.map(k=>{const cell=r.d[k.c];if(!cell||cell.v===undefined||cell.v===null||cell.v==='')return -1;const key=cell.t==='n'?String(cell.v):String(cell.v).trim();const i=k.map.get(key);return i===undefined?-1:i;});
-      items.push({er:r.er,p,o,vis,eng,eq:(EQC!==-1&&!isRT)?(cn(r.d[EQC])||0):0,rt:isRT,xn:(!isRT&&(p==='twitter'||p==='x'))?((RTN!==-1?cn(r.d[RTN])||0:0)+(QTN!==-1?cn(r.d[QTN])||0:0)):0,dep:DEPC!==-1?(cn(r.d[DEPC])||0):0,d,mk:mkOf(d),acc:CC!==-1?cs(r.d[CC]):null,c:cc,url:UC!==-1?cs(r.d[UC]):null,idp:IDPC!==-1?cs(r.d[IDPC]):null,b:bb});
+      items.push({er:r.er,p,o,vis,eng,eq:(EQC!==-1&&!isRT)?(cn(r.d[EQC])||0):0,rt:isRT,xn:(!isRT&&(p==='twitter'||p==='x'))?((RTN!==-1?cn(r.d[RTN])||0:0)+(QTN!==-1?cn(r.d[QTN])||0:0)+(CMC!==-1?cn(r.d[CMC])||0:0)):0,dep:DEPC!==-1?(cn(r.d[DEPC])||0):0,d,mk:mkOf(d),acc:CC!==-1?cs(r.d[CC]):null,c:cc,url:UC!==-1?cs(r.d[UC]):null,idp:IDPC!==-1?cs(r.d[IDPC]):null,b:bb});
     }
     const brandCols=cand.map(k=>k.name),brandDetected=detected.map(x=>x.name);
     res.push({sec:'RECAP',id:'recap',st:'i',lb:'Récapitulatif',msg:'',recap:Object.values(mp),brandCols,brandDetected,hasVis:VISC!==-1,rows:[]});
-    res.push({sec:'TOPS',id:'tops',st:'i',lb:'Tops',msg:'',items,brandCols,brandDetected,hasSOA:SOAC!==-1,hasRT:RTF!==-1,hasXn:RTN!==-1||QTN!==-1,hasVis:VISC!==-1,hasEq:EQC!==-1,hasDep:DEPC!==-1,hasDate:DC!==-1,cats:cats.map(k=>({name:k.name,values:k.values})),b2,rows:[]});
+    res.push({sec:'TOPS',id:'tops',st:'i',lb:'Tops',msg:'',items,brandCols,brandDetected,hasSOA:SOAC!==-1,hasRT:RTF!==-1,hasXn:RTN!==-1||QTN!==-1||CMC!==-1,hasVis:VISC!==-1,hasEq:EQC!==-1,hasDep:DEPC!==-1,hasDate:DC!==-1,cats:cats.map(k=>({name:k.name,base:k.base,values:k.values})),b2,rows:[]});
   }
 }
 
@@ -494,7 +495,7 @@ async function loadWorkbook(){
 }
 
 async function goTo(sec,target){
-  const name=window.__realNames[sec==='TOP10'?'DATA':sec];if(!name)return;
+  const name=(window.__genActive&&(sec==='DATA'||sec==='TOP10'))?window.__genSheet:window.__realNames[sec==='TOP10'?'DATA':sec];if(!name)return;
   await Excel.run(async(ctx)=>{const ws=ctx.workbook.worksheets.getItem(name);ws.activate();(target.row?ws.getRange(target.row+':'+target.row):ws.getRange(target.addr)).select();await ctx.sync();});
 }
 
@@ -792,6 +793,7 @@ const IC={
   tools:()=>svgI(26,[h('path',{key:1,d:'M4 7h16M4 12h16M4 17h16'}),h('circle',{key:2,cx:9,cy:7,r:2,fill:'#fff'}),h('circle',{key:3,cx:15,cy:12,r:2,fill:'#fff'}),h('circle',{key:4,cx:8,cy:17,r:2,fill:'#fff'})],'#2563eb'),
   sync:()=>svgI(26,h('path',{d:'M20 12a8 8 0 1 1-2.3-5.7M20 4v4h-4'}),'#2563eb'),
   chart:()=>svgI(26,h('path',{d:'M5 20V10M12 20V4M19 20v-7'}),'#2563eb'),
+  refresh:()=>svgI(16,h('path',{d:'M20 12a8 8 0 1 1-2.3-5.7M20 4v4h-4'})),
   check:()=>svgI(26,h('path',{d:'M5 12l4 4 10-10'}),'#2563eb')
 };
 function MenuHome(p){
@@ -1018,7 +1020,7 @@ function AnalyseTab(p){
   const row=(label,children)=>h('div',{style:{display:'flex',alignItems:'center',gap:6,flexWrap:'wrap',marginBottom:5,fontSize:'.75rem'}},h('span',{style:{width:92,color:'#64748b'}},label),children);
   const valOpts=(none)=>[{value:'',label:none}].concat(cat?sortVals(cat.values).map(v=>({value:v,label:v})):[]);
   const mainNames=['scope','semestre','année','annee','mois','plateforme','owned/paid/earned','compte ou requête','compte ou requete'];
-  const colOpts=tops.cats.filter(c=>mainNames.indexOf(c.name.toLowerCase())>=0).map(c=>({value:c.name,label:c.name,group:'Colonnes principales'})).concat(tops.cats.filter(c=>mainNames.indexOf(c.name.toLowerCase())<0).map(c=>({value:c.name,label:c.name,group:'Autres colonnes'})));
+  const colOpts=tops.cats.filter(c=>mainNames.indexOf((c.base||c.name).toLowerCase())>=0).map(c=>({value:c.name,label:c.name,group:'Colonnes principales'})).concat(tops.cats.filter(c=>mainNames.indexOf((c.base||c.name).toLowerCase())<0).map(c=>({value:c.name,label:c.name,group:'Autres colonnes'})));
   const modeBtn=(k,l)=>h('button',{onClick:()=>setMode(k),style:{padding:'3px 9px',fontSize:'.74rem',fontWeight:700,cursor:'pointer',border:'1px solid '+(mode===k?'#2563eb':'#cbd5e1'),background:mode===k?'#2563eb':'#fff',color:mode===k?'#fff':'#334155',borderRadius:6}},l);
 
   const kpi=(label,a,b,fmt,kind)=>h('div',{key:label,style:{background:'#fff',border:'1px solid #e2e8f0',borderRadius:8,padding:'6px 8px'}},
@@ -1066,21 +1068,21 @@ function AnalyseTab(p){
   /* ── en-tête : période, filtres, export ── */
   const periodBox=h('div',{style:box},
     h('div',{style:{display:'flex',alignItems:'center',gap:6}},
-      h('div',{style:{flex:1,minWidth:0,fontSize:'.76rem',color:'#334155',lineHeight:1.45}},'Période : ',h('strong',null,labA),hasB?[' · comparée à ',h('strong',{key:'b'},labB)]:' · sans comparaison',' — '+fI(A.n)+' posts'+(hasB?' / '+fI(B.n):'')),
+      h('div',{style:{flex:1,minWidth:0,fontSize:'.76rem',color:'#334155',lineHeight:1.45}},'Scope d\'analyse : ',h('strong',null,labA),hasB?[' · comparée à ',h('strong',{key:'b'},labB)]:' · sans comparaison',' — '+fI(A.n)+' posts'+(hasB?' / '+fI(B.n):'')),
       h('button',{style:BTN_N,onClick:()=>setEditP(!editP)},editP?'Fermer':'Modifier'),
       h('button',{style:BTN_B,onClick:doExport,title:'Crée une nouvelle feuille avec tous les tableaux de cet onglet'},'📤')),
-    tops.hasXn?h('label',{style:{display:'flex',alignItems:'flex-start',gap:6,marginTop:6,fontSize:'.74rem',color:'#334155',lineHeight:1.4,cursor:'pointer'}},h('input',{type:'checkbox',checked:cRT,onChange:e=>setCRT(e.target.checked),style:{marginTop:2}}),h('span',null,'Compter les retweets et quotes générés sur les tweets comme des contenus',cRT?h('strong',{style:{color:'#b91c1c'}},' (activé)'):null)):null,
+    tops.hasXn?h('label',{style:{display:'flex',alignItems:'flex-start',gap:6,marginTop:6,fontSize:'.74rem',color:'#334155',lineHeight:1.4,cursor:'pointer'}},h('input',{type:'checkbox',checked:cRT,onChange:e=>setCRT(e.target.checked),style:{marginTop:2}}),h('span',null,'Compter les retweets, quotes et replies (commentaires) générés sur les tweets comme des contenus',cRT?h('strong',{style:{color:'#b91c1c'}},' (activé)'):null)):null,
     tops.hasRT?h('div',{style:{marginTop:4,fontSize:'.68rem',color:'#64748b'}},'Les lignes marquées retweet (RT / is_retweet) comptent comme posts, mais leurs engagements, visibilité et EMV sont toujours ignorés.'):null,
     editP?h('div',{style:{marginTop:8,borderTop:'1px solid #e2e8f0',paddingTop:8}},
-      h('div',{style:{fontSize:'.72rem',color:'#64748b',marginBottom:8,lineHeight:1.5}},'Choisissez la période (colonne ou dates), puis une période de comparaison si besoin. Les filtres plateforme et marque s\'appliquent à tout l\'onglet.'),
+      h('div',{style:{fontSize:'.72rem',color:'#64748b',marginBottom:8,lineHeight:1.5}},'Choisissez le scope d\'analyse (colonne ou dates), puis un scope de comparaison si besoin. Les filtres plateforme et marque s\'appliquent à tout l\'onglet.'),
       h('div',{style:{display:'flex',gap:6,marginBottom:8}},modeBtn('col','Par colonne'),modeBtn('date','Par dates')),
       mode==='col'?h('div',null,
           row('Colonne',sel(col,(v)=>{setCol(v);setVa('');setVb('');},colOpts)),
-          row('Période',sel(va,setVa,valOpts('Toute la base'))),
+          row('Scope',sel(va,setVa,valOpts('Toute la base'))),
           row('Comparer à',sel(vb,setVb,valOpts('Aucune comparaison'))))
         :h('div',null,
           !tops.hasDate?h('div',{style:{color:'#b91c1c',fontSize:'.75rem'}},'Colonne « Date » introuvable.'):null,
-          row('Période',h('span',null,h('input',{type:'date',value:da1,onChange:e=>setDa1(e.target.value),style:{fontSize:'.73rem'}}),' → ',h('input',{type:'date',value:da2,onChange:e=>setDa2(e.target.value),style:{fontSize:'.73rem'}}))),
+          row('Scope',h('span',null,h('input',{type:'date',value:da1,onChange:e=>setDa1(e.target.value),style:{fontSize:'.73rem'}}),' → ',h('input',{type:'date',value:da2,onChange:e=>setDa2(e.target.value),style:{fontSize:'.73rem'}}))),
           row('Comparer à',h('span',null,h('input',{type:'date',value:db1,onChange:e=>setDb1(e.target.value),style:{fontSize:'.73rem'}}),' → ',h('input',{type:'date',value:db2,onChange:e=>setDb2(e.target.value),style:{fontSize:'.73rem'}})))),
       row('Plateforme',sel(plOn?pl:'',(v)=>onPl&&onPl(v),plOpts)),
       h(BrandSelect,{cols:tops.brandCols,detected:tops.brandDetected,value:brand,onChange:onBrand})):null);
@@ -1502,21 +1504,43 @@ const isEmptyV=(v)=>v===''||v===null||v===undefined;
 const isF=(f)=>typeof f==='string'&&f.charAt(0)==='=';
 /* écriture sécurisée : on relit chaque cellule juste avant d'écrire et on ne touche pas à ce qui a changé */
 async function writeChanges(sheet,changes,onProg,collect){
+  /* lecture et écriture par plages (et non cellule par cellule) : bien plus rapide sur des milliers de lignes */
   return Excel.run(async(ctx)=>{
-    const ws=ctx.workbook.worksheets.getItem(sheet);let n=0,skipped=0;
-    for(let i=0;i<changes.length;i+=500){
-      const part=changes.slice(i,i+500);
-      const cells=part.map(ch=>{const c=ws.getCell(ch.r,ch.c);c.load('values,formulasR1C1');return c;});
+    const ws=ctx.workbook.worksheets.getItem(sheet);let n=0,skipped=0,done=0;
+    const byC=new Map();changes.forEach(ch=>{let a=byC.get(ch.c);if(!a){a=[];byC.set(ch.c,a);}a.push(ch);});
+    const segs=[];
+    for(const [c,arr] of byC){
+      arr.sort((a,b)=>a.r-b.r);let i=0;
+      while(i<arr.length){let j=i;while(j+1<arr.length&&arr[j+1].r-arr[j].r<=200&&arr[j+1].r-arr[i].r<10000)j++;
+        segs.push({c,list:arr.slice(i,j+1),r0:arr[i].r,n:arr[j].r-arr[i].r+1});i=j+1;}
+    }
+    let k=0;
+    while(k<segs.length){
+      const batch=[];let tot=0;
+      while(k<segs.length&&(tot===0||tot+segs[k].n<=20000)){const sg=segs[k++];sg.rg=ws.getRangeByIndexes(sg.r0,sg.c,sg.n,1);sg.rg.load('values,formulasR1C1');batch.push(sg);tot+=sg.n;}
       await ctx.sync();
-      part.forEach((ch,k)=>{
-        const cur=cells[k].values[0][0],f=cells[k].formulasR1C1[0][0];
-        const ok=!isF(f)&&(ch.expect==='empty'?isEmptyV(cur):ch.expect==='any'?true:cur===ch.before);
-        if(!ok){skipped++;return;}
-        if(ch.fmt)cells[k].numberFormat=[[ch.fmt]];
-        if(collect)collect.push({r:ch.r,c:ch.c,old:cur,nw:ch.formula||ch.v,isF:!!ch.formula});if(ch.formula)cells[k].formulas=[[ch.formula]];else cells[k].values=[[ch.v]];n++;
-      });
+      for(const sg of batch){
+        const oks=[];
+        for(const ch of sg.list){
+          const o=ch.r-sg.r0,cur=sg.rg.values[o][0],f=sg.rg.formulasR1C1[o][0];
+          const ok=!isF(f)&&(ch.expect==='empty'?isEmptyV(cur):ch.expect==='any'?true:cur===ch.before);
+          if(!ok){skipped++;continue;}
+          if(collect)collect.push({r:ch.r,c:ch.c,old:cur,nw:ch.formula||ch.v,isF:!!ch.formula});
+          oks.push(ch);n++;
+        }
+        let a=0;
+        while(a<oks.length){
+          let b=a;const kind=oks[a].formula?'f':'v',fmt=oks[a].fmt||null;
+          while(b+1<oks.length&&oks[b+1].r===oks[b].r+1&&(oks[b+1].formula?'f':'v')===kind&&(oks[b+1].fmt||null)===fmt)b++;
+          const run=oks.slice(a,b+1),rg=ws.getRangeByIndexes(run[0].r,sg.c,run.length,1);
+          if(fmt)rg.numberFormat=run.map(()=>[fmt]);
+          if(kind==='f')rg.formulas=run.map(x=>[x.formula]);else rg.values=run.map(x=>[x.v]);
+          a=b+1;
+        }
+        done+=sg.list.length;
+      }
       await ctx.sync();
-      if(onProg)onProg(Math.min(i+500,changes.length),changes.length);
+      if(onProg)onProg(Math.min(done,changes.length),changes.length);
     }
     return {n,skipped};
   });
@@ -2314,7 +2338,7 @@ async function loadPivotForUpdate(scope,sheetName){
       for(let i=0;i<n;i++){if(ek>=0&&isFormula(rgs[ek].formulasR1C1[i][0]))engF.add(r0+i+1);const o={row:r0+i+1};for(let k=0;k<names.length;k++){const v=rgs[k].values[i][0];o[names[k]]=v===''?null:v;}rows.push(o);}
     }
     let scopeSet=null;
-    if(scope==='visible'&&lastIdx>=firstIdx){
+    if((scope==='visible'||scope==='selection')&&lastIdx>=firstIdx){
       const rg=sh.getRangeByIndexes(firstIdx,cidx[P.platform],lastIdx-firstIdx+1,1);
       const vis=rg.getSpecialCellsOrNullObject(Excel.SpecialCellType.visible);vis.load('isNullObject');await ctx.sync();
       if(!vis.isNullObject){
@@ -2377,7 +2401,7 @@ async function readSheetCols(sheetName){
 async function applySelectionScope(pv){
   const s=await getSel();
   if(s.sheet!==pv.sheet)throw new Error('Sélectionnez des lignes dans l\'onglet « '+pv.sheet+' » (la sélection actuelle est dans « '+s.sheet+' »).');
-  pv.scope=new Set();s.areas.forEach(a=>{for(let k=0;k<a.rowCount;k++)pv.scope.add(a.rowIndex+k+1);});
+  const vis=pv.scope;pv.scope=new Set();s.areas.forEach(a=>{for(let k=0;k<a.rowCount;k++){const rn=a.rowIndex+k+1;if(!vis||vis.has(rn))pv.scope.add(rn);}});
 }
 async function loadGenericForUpdate(scope,gi,map){
   const metricKeys=['likes','comments','shares','retweets','quotes','saves','views'].filter(k=>map[k]!=null);
@@ -2414,7 +2438,7 @@ async function loadGenericForUpdate(scope,gi,map){
       }
     }
     let scopeSet=null;
-    if(scope==='visible'&&lastIdx>=firstIdx){
+    if((scope==='visible'||scope==='selection')&&lastIdx>=firstIdx){
       const kc=map.id!=null?map.id:map.url;
       const rg=sh.getRangeByIndexes(firstIdx,kc,lastIdx-firstIdx+1,1);
       const vis=rg.getSpecialCellsOrNullObject(Excel.SpecialCellType.visible);vis.load('isNullObject');await ctx.sync();
@@ -2545,8 +2569,10 @@ async function countScopes(sheet,keyCol,firstIdx){
       vis.areas.load('items/rowIndex,items/rowCount');await ctx.sync();visible=0;
       for(const a of vis.areas.items)for(let k=0;k<a.rowCount;k++){const i=a.rowIndex+k-firstIdx;if(i>=0&&i<filled.length&&filled[i])visible++;}
     }
+    const visArr=new Uint8Array(filled.length).fill(1);
+    if(!vis.isNullObject){visArr.fill(0);for(const a of vis.areas.items)for(let k=0;k<a.rowCount;k++){const i=a.rowIndex+k-firstIdx;if(i>=0&&i<filled.length)visArr[i]=1;}}
     const seen=new Set();
-    if(sel.sheet===sheet)for(const a of sel.areas)for(let k=0;k<a.rowCount;k++){const i=a.rowIndex+k-firstIdx;if(i>=0&&i<filled.length&&filled[i])seen.add(i);}
+    if(sel.sheet===sheet)for(const a of sel.areas)for(let k=0;k<a.rowCount;k++){const i=a.rowIndex+k-firstIdx;if(i>=0&&i<filled.length&&filled[i]&&visArr[i])seen.add(i);}
     return {all,visible,selection:seen.size,selSheet:sel.sheet};
   });
 }
@@ -2705,7 +2731,7 @@ function UpdateTab(p){
   const [files,setFiles]=useState([]);
   const [target,setTarget]=useState(null);
   const [counts,setCounts]=useState(null);
-  const [scope,setScope]=useState('visible');
+  const [scope,setScope]=useState('all');
   const [picked,setPicked]=useState(false);
   const [track,setTrack]=useState(()=>prefGet('updTrack',true));
   useEffect(()=>{prefSet('updTrack',track);},[track]);
@@ -2736,7 +2762,7 @@ function UpdateTab(p){
     const kc=keyColOf(t);if(kc===null){setCounts(null);return;}
     const c=await countScopes(t.sheet,kc,t.kind==='pivot'?2:t.gi.headerRow+1);
     setCounts(c);
-    if(init||!live.current.picked)setScope(c.selection>1?'selection':(c.visible<c.all?'visible':'all'));
+    if(init||!live.current.picked)setScope(c.selection>1?'selection':'all');
   };
   useEffect(()=>{
     if(step!=='scope')return;
@@ -2864,9 +2890,8 @@ function UpdateTab(p){
     if(!target)return null;
     const gen=target.kind==='generic',ready=!gen||genericReady(target.gmap),c=counts;
     const cards=[
-      ['selection','Ma sélection',c?c.selection:0,c&&c.selection===0?(c.selSheet&&c.selSheet!==target.sheet?'Votre sélection est dans une autre feuille.':'Sélectionnez des lignes dans Excel.'):'Les lignes que vous avez sélectionnées maintenant dans Excel.'],
-      ['visible','Données filtrées',c?c.visible:0,'Les lignes visibles : fonctionne avec vos filtres.'+(c&&c.visible===c.all?' (Aucun filtre actif pour l\'instant.)':'')],
-      ['all','Tout le fichier',c?c.all:0,'Toutes les lignes, y compris celles que vos filtres cachent.']];
+      ['selection','Ma sélection actuelle',c?c.selection:0,c&&c.selection===0?(c.selSheet&&c.selSheet!==target.sheet?'Votre sélection est dans une autre feuille.':'Sélectionnez des lignes dans Excel.'):'Les lignes sélectionnées dans Excel, sans l\'en-tête ni les lignes masquées par vos filtres.'],
+      ['all','Toutes les lignes de l\'onglet',c?c.all:0,'Toutes les lignes (hors en-tête), filtres ignorés'+(c&&c.visible<c.all?' : '+fr(c.all-c.visible)+' ligne'+pl(c.all-c.visible,'')+' actuellement masquée'+pl(c.all-c.visible,'')+' par vos filtres sera'+(c.all-c.visible>1?'ont':'')+' aussi mise'+pl(c.all-c.visible,'')+' à jour.':'.')]];
     return h('div',null,
       h('div',{style:box},
         h('div',{style:{fontWeight:800,fontSize:'.9rem',marginBottom:4}},'Quelles lignes mettre à jour ?'),
@@ -3005,7 +3030,7 @@ function LastActionBar(p){
 }
 
 /* ═════════ Outils guidés ═════════ */
-async function readScoped(mode){
+async function readScoped(mode,withNF){
   const s=await getSel();
   return Excel.run(async(ctx)=>{
     const ws=ctx.workbook.worksheets.getItem(s.sheet);
@@ -3020,16 +3045,16 @@ async function readScoped(mode){
     }
     const seen=new Set(),rowsSeen=new Set();
     for(const a of areas){
-      const r0=Math.max(a.rowIndex,0),r1=Math.min(a.rowIndex+a.rowCount-1,R1),c0=Math.max(a.columnIndex,0),c1=Math.min(a.columnIndex+a.columnCount-1,C1);
+      const r0=Math.max(a.rowIndex,mode==='visible'?ur.rowIndex+1:0),r1=Math.min(a.rowIndex+a.rowCount-1,R1),c0=Math.max(a.columnIndex,0),c1=Math.min(a.columnIndex+a.columnCount-1,C1);
       if(r1<r0||c1<c0)continue;const w=c1-c0+1,step=Math.max(1,Math.floor(20000/w));
       for(let r=r0;r<=r1;r+=step){
         const n=Math.min(step,r1-r+1);
         if(out.scanned+n*w>300000){out.truncated=true;break;}
-        const rg=ws.getRangeByIndexes(r,c0,n,w);rg.load('values,formulasR1C1,numberFormat');await ctx.sync();out.scanned+=n*w;
+        const rg=ws.getRangeByIndexes(r,c0,n,w);rg.load(withNF?'values,formulasR1C1,numberFormat':'values,formulasR1C1');await ctx.sync();out.scanned+=n*w;
         for(let i=0;i<n;i++)for(let j=0;j<w;j++){
           const v=rg.values[i][j];if(v===''||v===null)continue;
           const key=(r+i)*16384+(c0+j);if(seen.has(key))continue;seen.add(key);
-          out.cells.push({r:r+i,c:c0+j,v,f:rg.formulasR1C1[i][j],nf:rg.numberFormat[i][j]});
+          out.cells.push({r:r+i,c:c0+j,v,f:rg.formulasR1C1[i][j],nf:withNF?rg.numberFormat[i][j]:''});
         }
       }
     }
@@ -3053,7 +3078,7 @@ async function countToolScopes(){
     const R1=ur.rowIndex+ur.rowCount-1,C1=ur.columnIndex+ur.columnCount-1;
     let sel=0,vis=0;const cs=new Set();
     for(const a of s.areas){
-      const r0=Math.max(a.rowIndex,0),r1=Math.min(a.rowIndex+a.rowCount-1,R1),c0=Math.max(a.columnIndex,0),c1=Math.min(a.columnIndex+a.columnCount-1,C1);
+      const r0=Math.max(a.rowIndex,ur.rowIndex+1),r1=Math.min(a.rowIndex+a.rowCount-1,R1),c0=Math.max(a.columnIndex,0),c1=Math.min(a.columnIndex+a.columnCount-1,C1);
       if(r1<r0||c1<c0)continue;
       sel+=(r1-r0+1)*(c1-c0+1);for(let c=c0;c<=c1;c++)cs.add(c);
       const vr=ws.getRangeByIndexes(r0,ur.columnIndex,r1-r0+1,1).getSpecialCellsOrNullObject(Excel.SpecialCellType.visible);vr.load('isNullObject');await ctx.sync();
@@ -3262,7 +3287,7 @@ async function planDedup(o){
       }
     }
     let scopeSet=null;
-    if(o.scope==='visible'&&last>=first){
+    if((o.scope==='visible'||o.scope==='selection')&&last>=first){
       const rg=sh.getRangeByIndexes(first,o.keyC,last-first+1,1);
       const vis=rg.getSpecialCellsOrNullObject(Excel.SpecialCellType.visible);vis.load('isNullObject');await ctx.sync();
       if(!vis.isNullObject){vis.areas.load('items/rowIndex,items/rowCount');await ctx.sync();
@@ -3274,7 +3299,7 @@ async function planDedup(o){
   if(o.scope==='selection'){
     const s=await getSel();
     if(s.sheet!==gi.sheet)throw new Error('Sélectionnez des lignes dans la feuille « '+gi.sheet+' » (la sélection actuelle est dans « '+s.sheet+' »).');
-    scopeSet=new Set();s.areas.forEach(a=>{for(let k=0;k<a.rowCount;k++)scopeSet.add(a.rowIndex+k);});
+    const vs=scopeSet;scopeSet=new Set();s.areas.forEach(a=>{for(let k=0;k<a.rowCount;k++){const ri=a.rowIndex+k;if(!vs||vs.has(ri))scopeSet.add(ri);}});
   }
   const newMark=o.markC==null;
   const markC=newMark?d.newCol:o.markC;
@@ -3304,11 +3329,11 @@ function GuidedTools(p){
   const {onToast}=p;
   const [step,setStep]=useState('home');          // home → setup → review → done
   const [tool,setTool]=useState(null);
-  const [scope,setScope]=useState('selection');
+  const [scope,setScope]=useState('visible');
   const [counts,setCounts]=useState(null);
   const [cols,setCols]=useState(null);
   const [tcol,setTcol]=useState(null);
-  const [mode,setMode]=useState('fill');
+  const [mode,setMode]=useState('newcol');
   const [real,setReal]=useState(true);
   const [plan,setPlan]=useState(null);
   const [done,setDone]=useState(null);
@@ -3362,7 +3387,7 @@ function GuidedTools(p){
   },[step]);
 
   const choose=async(k)=>{
-    setTool(k);setErr('');setPlan(null);setMode(k==='profurl'?'inplace':'fill');setStep('setup');setBusy('x');
+    setTool(k);setErr('');setPlan(null);setMode(k==='profurl'?'inplace':'newcol');setStep('setup');setBusy('x');
     try{
       if(k==='dedup')await initDedup();
       else{await recount(k);if(k==='ids'||k==='username')await loadCols(k);}
@@ -3376,11 +3401,17 @@ function GuidedTools(p){
         setProg('Lecture des lignes…');await new Promise(r=>setTimeout(r,20));
         setPlan(await planDedup({gi:dd.gi,keyC:dd.keyC,platC:dd.platC,markC:dd.markC,scope:ddScope}));setStep('review');setBusy('');setProg('');return;
       }
-      const sel=await readScoped(scope);
-      if(!sel.cells.length)throw new Error(scope==='selection'?'Sélectionnez d\'abord des cellules (non vides) dans Excel.':'Aucune cellule non vide dans ce périmètre.');
+      const sel=await readScoped(scope,tool==='dates');
+      if(!sel.cells.length)throw new Error(scope==='visible'?'Sélectionnez d\'abord des cellules (non vides) dans Excel.':'Aucune cellule non vide dans ce périmètre.');
       setProg('Analyse…');await new Promise(r=>setTimeout(r,20));
-      const po={mode,tcol,colsSheet:cols&&cols.sheet};
+      let po={mode,tcol,colsSheet:cols&&cols.sheet},nh=null;
+      if(mode==='newcol'&&(tool==='ids'||tool==='profurl'||tool==='username')){
+        const ni=await Excel.run(async(ctx)=>{const ur=ctx.workbook.worksheets.getItem(sel.sheet).getUsedRangeOrNullObject(true);ur.load('rowIndex,columnIndex,rowCount,columnCount,isNullObject');await ctx.sync();return ur.isNullObject?null:{hr:ur.rowIndex,c:ur.columnIndex+ur.columnCount};});
+        if(!ni)throw new Error('La feuille est vide.');
+        po={mode:'fill',tcol:ni.c,colsSheet:sel.sheet};nh={r:ni.hr,c:ni.c,head:tool==='ids'?'ID':tool==='username'?'Username':'URL nettoyée'};
+      }
       const r=tool==='ids'?await planIds(sel,po):tool==='profurl'?await planProfile(sel,{...po,kind:'clean',profileOnly:profOnly}):tool==='username'?await planProfile(sel,{...po,kind:'user'}):tool==='player'?await planPlayer(sel):tool==='dates'?await planDates(sel,{real}):await planSpaces(sel);
+      if(nh&&r.changes&&r.changes.length)r.changes.unshift({r:nh.r,c:nh.c,v:nh.head,fmt:null,expect:'empty',before:'',label:'(en-tête)',showBefore:'nouvelle colonne'});
       r.scanned=sel.cells.length;setPlan(r);setStep('review');
     }catch(e){setErr(msg(e));}
     setBusy('');setProg('');
@@ -3418,9 +3449,8 @@ function GuidedTools(p){
   const screenSetupDedup=()=>{
     const g=dd&&dd.gi,c=ddCounts;
     const opts=g?g.cols.map(x=>({value:String(x.c),label:x.letter+(x.name?' · '+x.name:'')})):[];
-    const cards=[['all','Toutes les lignes','Toutes les lignes de la feuille qui ont une valeur dans la colonne comparée.',c?c.all:0],
-      ['visible','Lignes visibles seulement','Ignore les lignes masquées par vos filtres.',c?c.visible:0],
-      ['selection','Ma sélection','Seules les lignes sélectionnées dans Excel sont comparées entre elles.',c?c.selection:0]];
+    const cards=[['selection','Ma sélection actuelle','Seules les lignes sélectionnées dans Excel, sans l\'en-tête ni les lignes masquées par vos filtres, sont comparées entre elles.',c?c.selection:0],
+      ['all','Toutes les lignes de l\'onglet','Toutes les lignes (hors en-tête) qui ont une valeur dans la colonne comparée, filtres ignorés.',c?c.all:0]];
     return h('div',null,
       h('div',{style:box},
         h('div',{style:{fontWeight:800,fontSize:'.9rem',marginBottom:4}},T.ic+' '+T.t),
@@ -3445,12 +3475,11 @@ function GuidedTools(p){
     if(tool==='dedup')return screenSetupDedup();
     const c=counts;
     const cards=[
-      ['selection','Ma sélection','Les cellules sélectionnées maintenant dans Excel.',c?c.selection:0],
-      ['visible','Ma sélection, lignes visibles seulement','Ignore les lignes masquées par vos filtres.',c?c.visible:0],
-      ['columns','Les colonnes de ma sélection, en entier','Toutes les lignes de ces colonnes (sauf la 1re ligne, supposée être l\'en-tête).',c?c.columns:0]];
+      ['visible','Ma sélection actuelle','Les cellules sélectionnées dans Excel, sans la ligne d\'en-tête ni les lignes masquées par vos filtres.',c?c.visible:0],
+      ['columns','Toutes les lignes de l\'onglet','Toutes les lignes (hors en-tête) des colonnes que vous avez sélectionnées, filtres ignorés.',c?c.columns:0]];
     const opts=cols?cols.cols.map(x=>({value:String(x.c),label:x.letter+(x.name?' · '+x.name:'')})):[];
     const needsCol=tool==='ids'||tool==='profurl'||tool==='username';
-    const idsReady=!needsCol||mode==='inplace'||tcol!==null;
+    const idsReady=!needsCol||mode==='inplace'||mode==='newcol'||tcol!==null;
     return h('div',null,
       h('div',{style:box},
         h('div',{style:{fontWeight:800,fontSize:'.9rem',marginBottom:4}},T.ic+' '+T.t),
@@ -3462,11 +3491,11 @@ function GuidedTools(p){
         h('div',{style:{textAlign:'right'}},h('span',{className:'rl',style:{fontSize:'.72rem'},onClick:recount},'↻ Actualiser les nombres'))),
       (tool==='ids'||tool==='profurl'||tool==='username')?h('div',{style:box},
         h('div',{style:{fontWeight:700,fontSize:'.8rem',marginBottom:6}},tool==='ids'?'Où écrire les ID ?':tool==='username'?'Où écrire les usernames ?':'Où écrire les URL nettoyées ?'),
-        h('div',{style:rowS},modeBtn2(mode,setMode,'fill','Dans une autre colonne'),modeBtn2(mode,setMode,'inplace','À la place des URL')),
+        h('div',{style:rowS},modeBtn2(mode,setMode,'newcol','Dans une nouvelle colonne'),modeBtn2(mode,setMode,'fill','Dans une colonne existante'),modeBtn2(mode,setMode,'inplace','À la place des URL')),
         mode==='fill'?h('div',{style:rowS},h('span',{style:{color:'#64748b'}},'Colonne à remplir'),
           h(Picker,{value:tcol===null?'':String(tcol),onChange:(v)=>setTcol(v===''?null:+v),options:[{value:'',label:'— choisir —'}].concat(opts)}),
           h('span',{className:'rl',onClick:()=>loadCols(tool)},'↻'),cols?h('span',{style:{color:'#94a3b8'}},'feuille « '+cols.sheet+' »'):null):null,
-        h('div',{style:{fontSize:'.7rem',color:'#64748b'}},mode==='fill'?'Les cellules déjà remplies de cette colonne ne sont jamais modifiées.':'L\'URL est remplacée dans la cellule : l\'annulation rétablit l\'ancienne valeur.'),
+        h('div',{style:{fontSize:'.7rem',color:'#64748b'}},mode==='newcol'?'Une colonne est ajoutée à droite des données, avec un en-tête. Rien n\'est écrasé.':mode==='fill'?'Les cellules déjà remplies de cette colonne ne sont jamais modifiées.':'L\'URL est remplacée dans la cellule : l\'annulation rétablit l\'ancienne valeur.'),
         tool==='profurl'?h('div',{style:{...rowS,marginTop:8}},modeBtn2(profOnly,setProfOnly,false,'URL complète nettoyée'),modeBtn2(profOnly,setProfOnly,true,'Seulement la page du profil')):null,
         tool==='profurl'?h('div',{style:{fontSize:'.7rem',color:'#64748b'}},profOnly?'Ex. instagram.com/Nike/reels/ devient www.instagram.com/Nike (les URL de post sans compte identifiable sont simplement nettoyées).':'Le chemin est conservé tel quel, seuls les paramètres de suivi sont retirés.'):null):null,
       tool==='dates'?h('div',{style:box},
@@ -3781,6 +3810,23 @@ function FormulasTab(p){
     }catch(e){setErr(msg(e));}
   };
   useEffect(()=>{loadInfo();},[]);
+  const infoRef=useRef(null),srcRef=useRef(null),refreshRef=useRef(null);infoRef.current=info;srcRef.current=src;
+  const remapC=(c,oi,ni)=>{if(c===null||c===undefined)return c;const o=oi.cols.find(x=>x.c===c);if(!o)return null;const same=ni.cols.find(x=>x.c===c);if(same&&same.name===o.name)return c;const f=ni.cols.find(x=>x.name===o.name);return f?f.c:null;};
+  const refresh=async()=>{
+    const sn=srcRef.current;if(!sn)return;
+    try{
+      const r=await readSheetCols(sn);const oi=infoRef.current;
+      if(oi&&oi.sheet===r.sheet){
+        if(oi.headerRow===r.headerRow&&JSON.stringify(oi.cols)===JSON.stringify(r.cols))return;
+        setKeyC(c=>remapC(c,oi,r));setResC(c=>remapC(c,oi,r));setEndC(c=>remapC(c,oi,r));setValC(c=>remapC(c,oi,r));
+        setCrits(cs=>cs.map(c=>({...c,c:remapC(c.c,oi,r)})));setPrev(null);
+      }
+      setInfo(r);
+    }catch(e){}
+  };
+  refreshRef.current=refresh;if(p.refreshHook)p.refreshHook.current=refresh;
+  useEffect(()=>{if(p.active)refreshRef.current();},[p.active]);
+  useEffect(()=>{const f=()=>{if(refreshRef.current)refreshRef.current();};try{window.addEventListener('focus',f);}catch(e){}return ()=>{try{window.removeEventListener('focus',f);}catch(e){}};},[]);
   const changeSrc=async(n)=>{setKeyC(null);setResC(null);setEndC(null);setValC(null);setCrits(cs=>cs.map(c=>({...c,c:null})));setPrev(null);await loadInfo(n);};
 
   const spec={kind,variant,src,keyC,resC,endC,keyR:Number(keyR)||0,resR:Number(resR)||0,endR:Number(endR)||0,keyMode,keyText,nf,keyRef,valC,crits:kind==='lookup'?[]:crits};
@@ -3953,6 +3999,154 @@ function FormulasTab(p){
 }
 
 const navBtnS=(off)=>({width:28,height:28,border:0,borderRadius:6,background:'rgba(255,255,255,.14)',color:'#fff',display:'flex',alignItems:'center',justifyContent:'center',flex:'none',cursor:off?'default':'pointer',opacity:off?.35:1});
+/* ═════════ Analyse hors pivot : lecture d'un onglet quelconque ═════════ */
+const gNorm=(s)=>String(s==null?'':s).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').trim();
+const G_PL=[[/insta|^ig$/,'instagram'],[/^fb$|facebook/,'facebook'],[/twitter|^x$|tweet/,'twitter'],[/youtube|^yt$/,'youtube'],[/linkedin|^li$/,'linkedin'],[/tiktok|^tt$/,'tiktok'],[/twitch/,'twitch'],[/strava/,'strava'],[/snap/,'snapchat'],[/stor(y|ies)/,'story'],[/web|site|press/,'websites']];
+const gPlat=(v)=>{const s=gNorm(v);if(!s)return '';for(const [re,k] of G_PL)if(re.test(s))return k;return s;};
+const gPlatUrl=(u)=>{const s=String(u||'').toLowerCase().trim();if(!s)return '';
+  if(/instagram\.com/.test(s))return 'instagram';if(/facebook\.com|fb\.com|fb\.watch/.test(s))return 'facebook';
+  if(/twitter\.com|(^|\/\/|www\.)x\.com/.test(s))return 'twitter';if(/youtube\.com|youtu\.be/.test(s))return 'youtube';
+  if(/linkedin\.com/.test(s))return 'linkedin';if(/tiktok\.com/.test(s))return 'tiktok';if(/twitch\.tv/.test(s))return 'twitch';
+  if(/strava\.com/.test(s))return 'strava';if(/snapchat\.com/.test(s))return 'snapchat';
+  return /^https?:\/\//.test(s)?'websites':'';};
+const gNum=(v)=>{if(typeof v==='number')return isFinite(v)?v:null;if(typeof v!=='string')return null;const t=v.replace(/[\s ]/g,'').replace(',','.');if(!t||!/^-?\d+(\.\d+)?$/.test(t))return null;return parseFloat(t);};
+const gDate=(v)=>{
+  if(typeof v==='number'){if(v>1e11)return Math.floor(v/86400000+25569);return v>20000&&v<80000?Math.floor(v):null;}
+  if(typeof v!=='string')return null;const s=v.trim();let m;
+  if((m=/^(\d{4})-(\d{2})-(\d{2})/.exec(s)))return Math.floor(Date.UTC(+m[1],+m[2]-1,+m[3])/86400000+25569);
+  if((m=/^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{2,4})/.exec(s))){const y=+m[3]<100?2000+ +m[3]:+m[3];return Math.floor(Date.UTC(y,+m[2]-1,+m[1])/86400000+25569);}
+  return null;};
+function gDetect(cols){
+  const f=(...res)=>{for(const re of res){const c=cols.find(x=>re.test(gNorm(x.name)));if(c)return c.c;}return null;};
+  const m={plat:f(/^(plateforme|platform|social[ _]?media|reseau|network|canal|channel)/),url:f(/^(url|post[ _]?url|permalink|link|lien)/),
+    date:f(/^(date|created|publi|posted|jour|day)/),acc:f(/^(compte|account|page|author|auteur|profil|username|nom)/),
+    type:f(/owned|paid|earned/,/^type/),vis:f(/^visibilit/,/^impression/,/^(reach|portee)/,/^(vues|views|video views|view count|nombre de vues)/),
+    engTotal:f(/^(social actions|engagements?|interactions?|total eng)/),eq:f(/equivalent media|^emv/),dep:f(/depenses paid|^(spend|cost|budget)/)};
+  m.engParts=m.engTotal!=null?[]:cols.filter(x=>/^(likes?|reactions?|comments?|commentaires?|shares?|partages?|saves?|enregistrements?|retweets?|quotes?)$/.test(gNorm(x.name))).map(x=>x.c);
+  m.engMode=m.engTotal!=null?'total':(m.engParts.length?'sum':'total');
+  return m;
+}
+async function gReadHeaders(sheetName,headerRow){
+  return Excel.run(async(ctx)=>{
+    const wl=ctx.workbook.worksheets;wl.load('items/name');const act=wl.getActiveWorksheet();act.load('name');await ctx.sync();
+    const name=sheetName||act.name;const sh=wl.getItem(name);
+    const ur=sh.getUsedRangeOrNullObject(true);ur.load('rowIndex,columnIndex,rowCount,columnCount,isNullObject');await ctx.sync();
+    if(ur.isNullObject)throw new Error('La feuille « '+name+' » est vide.');
+    const hr1=headerRow||ur.rowIndex+1;
+    if(hr1<ur.rowIndex+1||hr1>ur.rowIndex+ur.rowCount)throw new Error('Cette ligne d\'en-têtes est en dehors des données de la feuille.');
+    const hr=sh.getRangeByIndexes(hr1-1,ur.columnIndex,1,ur.columnCount);hr.load('values');await ctx.sync();
+    return {sheet:name,sheets:wl.items.map(s=>s.name),headerRow:hr1,lastRow:ur.rowIndex+ur.rowCount,c0:ur.columnIndex,
+      cols:hr.values[0].map((v,i)=>({c:ur.columnIndex+i,letter:colL(ur.columnIndex+i),name:String(v==null?'':v).trim()})).filter(x=>x.name!=='')};
+  });
+}
+async function gBuild(info,map,onProg){
+  const cols=info.cols,nrows=info.lastRow-info.headerRow,items=[];
+  if(!cols.length)throw new Error('Aucune colonne avec un en-tête.');
+  const c0=cols[0].c,W=cols[cols.length-1].c-c0+1;
+  const cm=cols.map(()=>({m:new Map(),ok:true}));
+  const skip=new Set([map.url,map.date,map.vis,map.eq,map.dep,map.engTotal].concat(map.engMode==='sum'?(map.engParts||[]):[]).filter(x=>x!=null));
+  const parts=map.engMode==='sum'?(map.engParts||[]):[];
+  await Excel.run(async(ctx)=>{
+    const sh=ctx.workbook.worksheets.getItem(info.sheet);
+    const chunk=Math.max(500,Math.floor(150000/W));
+    for(let off=0;off<nrows;off+=chunk){
+      const n=Math.min(chunk,nrows-off);
+      const rg=sh.getRangeByIndexes(info.headerRow+off,c0,n,W);rg.load('values');await ctx.sync();
+      const V=rg.values;
+      for(let i=0;i<n;i++){
+        const row=V[i];let any=false;for(let j=0;j<row.length;j++){if(row[j]!==''&&row[j]!==null){any=true;break;}}
+        if(!any)continue;
+        const val=(c)=>c==null?'':row[c-c0];
+        let p=map.plat!=null?gPlat(val(map.plat)):'';if(!p&&map.url!=null)p=gPlatUrl(val(map.url));if(!p)p='(vide)';
+        const vis=map.vis!=null?gNum(val(map.vis)):null;
+        let eng=0;if(map.engMode==='total'&&map.engTotal!=null)eng=gNum(val(map.engTotal))||0;else for(const c of parts)eng+=gNum(val(c))||0;
+        const d=map.date!=null?gDate(val(map.date)):null;
+        const o=map.type!=null?((String(val(map.type)).toLowerCase().trim())||'(vide)'):'—';
+        const cv=new Int16Array(cols.length).fill(-1);
+        for(let j=0;j<cols.length;j++){const q=cm[j];if(!q.ok||skip.has(cols[j].c))continue;const v=row[cols[j].c-c0];if(v===''||v===null)continue;
+          const key=typeof v==='number'?String(v):String(v).trim();if(!key)continue;let ix=q.m.get(key);
+          if(ix===undefined){if(q.m.size>=60){q.ok=false;continue;}ix=q.m.size;q.m.set(key,ix);}cv[j]=ix;}
+        items.push({er:info.headerRow+off+i+1,p,o,vis,eng,eq:map.eq!=null?(gNum(val(map.eq))||0):0,dep:map.dep!=null?(gNum(val(map.dep))||0):0,d,
+          mk:(d!==null&&d>20000&&d<80000)?new Date(Math.round((d-25569)*86400000)).toISOString().slice(0,7):null,
+          acc:map.acc!=null?(String(val(map.acc)).trim()||null):null,c:null,cv,url:map.url!=null?(String(val(map.url)).trim()||null):null,idp:null,b:[],rt:false,xn:0});
+      }
+      if(onProg)onProg(Math.min(100,Math.round((off+n)/nrows*100)));
+    }
+  });
+  const PRI=['scope','semestre','annee','mois','plateforme','owned/paid/earned','compte ou requete'];
+  let valid=[];cols.forEach((x,j)=>{if(cm[j].ok&&cm[j].m.size>=1&&!skip.has(x.c))valid.push(j);});
+  const cnt={};valid.forEach(j=>{const l=gNorm(cols[j].name);cnt[l]=(cnt[l]||0)+1;});
+  valid.sort((a,b)=>{const pa=PRI.indexOf(gNorm(cols[a].name)),pb=PRI.indexOf(gNorm(cols[b].name));return (pa<0?99:pa)-(pb<0?99:pb);});
+  const cats=valid.map(j=>({name:cols[j].name+(cnt[gNorm(cols[j].name)]>1?' (col. '+cols[j].letter+')':''),base:cols[j].name,values:[...cm[j].m.keys()]}));
+  items.forEach(it=>{it.c=valid.map(j=>it.cv[j]);delete it.cv;});
+  return {sec:'TOPS',id:'tops',st:'i',lb:'Tops',msg:'',items,brandCols:[],brandDetected:[],hasSOA:true,hasVis:map.vis!=null,hasEq:map.eq!=null,hasDep:map.dep!=null,hasDate:map.date!=null,hasRT:false,hasXn:false,cats,b2:null,rows:[]};
+}
+function GenericSetup(p){
+  const {onBuilt,hook,onToast,built}=p;
+  const [info,setInfo]=useState(null),[map,setMap]=useState(null),[hrow,setHrow]=useState('');
+  const [busy,setBusy]=useState(''),[err,setErr]=useState(''),[open,setOpen]=useState(true),[sum,setSum]=useState(null);
+  const msg=(e)=>String(e&&e.message?e.message:e);
+  const load=async(sheet,hr)=>{
+    setErr('');
+    try{
+      const r=await gReadHeaders(sheet,hr);const sv=prefGet('anaGen',null);
+      const okSv=sv&&sv.sheet===r.sheet&&sv.headerRow===r.headerRow&&sv.map;
+      setInfo(r);setHrow(String(r.headerRow));setMap(okSv?sv.map:gDetect(r.cols));
+    }catch(e){setErr(msg(e));}
+  };
+  useEffect(()=>{const sv=prefGet('anaGen',null);load(sv&&sv.sheet,sv&&sv.headerRow);},[]);
+  const run=async()=>{
+    if(!info||!map)return;
+    setErr('');setBusy('Lecture… 0 %');
+    try{
+      await new Promise(r=>setTimeout(r,30));
+      const t=await gBuild(info,map,(n)=>setBusy('Lecture… '+n+' %'));
+      prefSet('anaGen',{sheet:info.sheet,headerRow:info.headerRow,map});
+      window.__genSheet=info.sheet;
+      setSum({sheet:info.sheet,n:t.items.length});
+      onBuilt(t,info.sheet);setOpen(false);
+    }catch(e){setErr(msg(e));}
+    setBusy('');
+  };
+  const runRef=useRef(null);runRef.current=run;
+  useEffect(()=>{if(hook)hook.current=async()=>{if(!built)return;await runRef.current();onToast&&onToast('Onglet relu.');};},[built]);
+  const box={background:'#fff',border:'1px solid #cbd5e1',borderRadius:8,padding:'8px 10px',marginBottom:8,fontSize:'.76rem'};
+  if(!open&&sum)return h('div',{style:{...box,display:'flex',alignItems:'center',gap:6}},
+    h('div',{style:{flex:1,minWidth:0,color:'#334155'}},'Onglet analysé : ',h('strong',null,sum.sheet),' · '+fI(sum.n)+' lignes'),
+    h('button',{style:BTN_N,onClick:()=>setOpen(true)},'Modifier'));
+  const set=(k,v)=>setMap(m=>({...m,[k]:v}));
+  const sel=(val,on,ph)=>h('select',{value:val==null?'':String(val),onChange:e=>on(e.target.value===''?null:Number(e.target.value)),style:{width:'100%',fontSize:'.74rem',padding:'3px',minWidth:0}},
+    h('option',{value:''},ph||'— aucune —'),info.cols.map(o=>h('option',{key:o.c,value:String(o.c)},'['+o.letter+'] '+o.name)));
+  const row=(lb,ctl,hint)=>h('div',{style:{display:'flex',alignItems:'center',gap:6,marginBottom:5}},h('div',{style:{width:104,flex:'none',color:'#475569',fontWeight:600}},lb),h('div',{style:{flex:1,minWidth:0}},ctl),hint||null);
+  const noVis=map&&map.vis==null,noEng=map&&((map.engMode==='total'&&map.engTotal==null)||(map.engMode==='sum'&&!(map.engParts||[]).length));
+  return h('div',{style:box},
+    h('div',{style:{fontWeight:800,marginBottom:6,color:'#1e293b'}},'Analyser un autre onglet'),
+    err?h('div',{style:{color:'#b91c1c',marginBottom:6}},err):null,
+    !info?h('div',{style:{color:'#64748b'}},'Lecture de l\'onglet…'):h('div',null,
+      row('Onglet',h('select',{value:info.sheet,onChange:e=>load(e.target.value,null),style:{width:'100%',fontSize:'.74rem',padding:'3px'}},info.sheets.map(s=>h('option',{key:s,value:s},s)))),
+      row('Ligne d\'en-têtes',h('span',null,h('input',{type:'number',min:1,value:hrow,onChange:e=>setHrow(e.target.value),style:{width:60,fontSize:'.74rem'}}),' ',h('button',{style:{...BTN_N,padding:'2px 8px'},onClick:()=>load(info.sheet,Number(hrow)||null)},'Relire'))),
+      map?h('div',null,
+        h('div',{style:{fontSize:'.68rem',color:'#64748b',margin:'4px 0 6px'}},'Colonnes reconnues automatiquement : corrigez si besoin.'),
+        row('Plateforme',sel(map.plat,(v)=>set('plat',v)),null),
+        row('URL du post',sel(map.url,(v)=>set('url',v))),
+        row('Date',sel(map.date,(v)=>set('date',v))),
+        row('Compte',sel(map.acc,(v)=>set('acc',v))),
+        row('Owned/Paid/Earned',sel(map.type,(v)=>set('type',v))),
+        row('Visibilité',sel(map.vis,(v)=>set('vis',v),'— choisir —')),
+        noVis?h('div',{style:{background:'#fef3c7',border:'1px solid #f59e0b',borderRadius:6,padding:'4px 8px',marginBottom:6,color:'#92400e'}},'Il faut une colonne de visibilité (impressions ou vues) pour les analyses de visibilité. Sans elle, seuls les tops par engagement et les comptages sont disponibles.'):null,
+        h('div',{style:{display:'flex',gap:6,marginBottom:5}},
+          ['total','sum'].map(k=>h('button',{key:k,onClick:()=>set('engMode',k),style:{flex:1,padding:'5px 4px',fontSize:'.72rem',fontWeight:700,cursor:'pointer',borderRadius:6,border:'1px solid '+(map.engMode===k?'#1e293b':'#94a3b8'),background:map.engMode===k?'#1e293b':'#fff',color:map.engMode===k?'#fff':'#1e293b'}},k==='total'?'Engagements : une colonne':'Engagements : additionner'))),
+        map.engMode==='total'?row('Engagements',sel(map.engTotal,(v)=>set('engTotal',v),'— choisir —')):
+          h('div',{style:{maxHeight:110,overflowY:'auto',border:'1px solid #e2e8f0',borderRadius:6,padding:'4px 6px',marginBottom:5}},
+            info.cols.map(o=>h('label',{key:o.c,style:{display:'flex',gap:5,alignItems:'center',fontSize:'.72rem'}},
+              h('input',{type:'checkbox',checked:(map.engParts||[]).indexOf(o.c)>=0,onChange:e=>set('engParts',e.target.checked?(map.engParts||[]).concat([o.c]):(map.engParts||[]).filter(x=>x!==o.c))}),'['+o.letter+'] '+o.name))),
+        noEng?h('div',{style:{background:'#fef3c7',border:'1px solid #f59e0b',borderRadius:6,padding:'4px 8px',marginBottom:6,color:'#92400e'}},'Il faut une colonne qui contient les engagements, ou cocher les colonnes à additionner (likes, commentaires, partages…).'):null,
+        row('Équivalent média',sel(map.eq,(v)=>set('eq',v))),
+        row('Dépenses paid',sel(map.dep,(v)=>set('dep',v))),
+        h('button',{style:{...BTN_B,width:'100%',padding:'8px',marginTop:4,opacity:(busy||noEng)?.5:1},disabled:!!busy||!!noEng,onClick:run},busy||'Analyser cet onglet'),
+        h('div',{style:{fontSize:'.68rem',color:'#64748b',marginTop:5}},'Les colonnes choisies sont mémorisées (jamais les données). Si la plateforme n\'est pas dans une colonne, elle est déduite du domaine de l\'URL.')):null));
+}
+
 function PivotVerifier(){
   const [results,setResults]=useState([]);
   const [busy,setBusy]=useState(false);
@@ -3977,6 +4171,15 @@ function PivotVerifier(){
   const [anaSub,setAnaSub]=useState(()=>prefGet('anaSub','tops'));
   const [anaPl,setAnaPl]=useState(()=>prefGet('anaPl',''));
   const subBack=useRef({});
+  const fRefresh=useRef(null),fLast=useRef(0);
+  const [stale,setStale]=useState(false);
+  const [anaSrc,setAnaSrcS]=useState(()=>prefGet('anaSrc','pivot'));
+  const setAnaSrc=(v)=>{setAnaSrcS(v);prefSet('anaSrc',v);};
+  const [genTops,setGenTops]=useState(null),[genVer,setGenVer]=useState(0);
+  const genHook=useRef(null);
+  window.__genActive=anaSrc==='other'&&!!genTops;
+  const refreshAll=async()=>{if(tab==='analyse'&&anaSrc==='other'){if(genHook.current)genHook.current();return;}if(tab==='formules'){try{if(fRefresh.current)await fRefresh.current();setToast('Colonnes actualisées.');}catch(e){}}else run();};
+  const refreshOnClick=()=>{const t=Date.now();if(t-fLast.current<1500)return;fLast.current=t;if(fRefresh.current)fRefresh.current();};
   useEffect(()=>{prefSet('anaSub',anaSub);},[anaSub]);
   useEffect(()=>{prefSet('anaPl',anaPl);},[anaPl]);
   useEffect(()=>{prefSet('anaBrand',recapBrand);},[recapBrand]);
@@ -4008,7 +4211,7 @@ function PivotVerifier(){
         setNewIds(new Set([...cur].filter(id=>!pv.ids.has(id))));
       }else setNewIds(new Set());
       prev.current={ids:cur,labels:Object.fromEntries(norm.filter(r=>cur.has(r.id)).map(r=>[r.id,r.lb]))};
-      setResults(norm);setRunAt(new Date());
+      setResults(norm);setRunAt(new Date());setStale(false);
     }catch(e){
       setErr("Impossible de lire le classeur : "+(e&&e.message?e.message:e)+" — ce volet doit être ouvert depuis Excel.");
     }
@@ -4021,11 +4224,13 @@ function PivotVerifier(){
     run();
     // Relance automatique : écoute les modifications du classeur (ExcelApi 1.7)
     const onChange=async(ev)=>{
-      if(!autoRef.current||Date.now()<quietRef.current)return;
+      if(Date.now()<quietRef.current)return;
       try{ /* on ignore les modifications des feuilles qui ne sont pas analysées (ex. la feuille de synthèse exportée) */
         if(ev&&ev.worksheetId){const nm=await Excel.run(async(ctx)=>{const s=ctx.workbook.worksheets.getItem(ev.worksheetId);s.load('name');await ctx.sync();return s.name;});
           if(EXP.map(x=>x.toLowerCase()).indexOf(String(nm).toLowerCase())<0)return;}
       }catch(e){}
+      setStale(true);
+      if(!autoRef.current)return;
       clearTimeout(timerRef.current);
       timerRef.current=setTimeout(()=>{if(autoRef.current)runRef.current(undefined,true);},Math.max(2500,(durRef.current||0)*3));
     };
@@ -4036,7 +4241,7 @@ function PivotVerifier(){
   const go=(t)=>{setNav(n=>n[n.length-1]===t?n:n.concat([t]).slice(-14));if(t!=='menu')prefSet('lastTab',t);};
   const goHome=()=>setNav(['menu']);
   const goBack=()=>{const f=subBack.current[tab];if(f&&f())return;setNav(n=>n.length>1?n.slice(0,-1):n);};
-  const plSet=useMemo(()=>{const o={};(results.find(r=>r.id==='tops')||{items:[]}).items.forEach(x=>{o[x.p]=1;});return o;},[results]);
+  const plSet=useMemo(()=>{const o={};((anaSrc==='other'?genTops:results.find(r=>r.id==='tops'))||{items:[]}).items.forEach(x=>{o[x.p]=1;});return o;},[results,anaSrc,genTops]);
 
   const flip=(setter,k)=>setter(prevS=>{const n=new Set(prevS);n.has(k)?n.delete(k):n.add(k);return n;});
   const onSeen=(id,v)=>setAcked(p=>{const n=new Set(p);v?n.add(id):n.delete(id);return n;});
@@ -4076,7 +4281,7 @@ function PivotVerifier(){
   const issues=results.filter(r=>r.lv==='b'||r.lv==='v');
   const bl=issues.filter(r=>r.lv==='b').sort((a,b)=>{const pa=PRIORITY.indexOf(a.id),pb=PRIORITY.indexOf(b.id);return (pa<0?99:pa)-(pb<0?99:pb);}),vf=issues.filter(r=>r.lv==='v'&&!acked.has(r.id)),seenL=issues.filter(r=>r.lv==='v'&&acked.has(r.id));
   const infos=results.filter(r=>r.lv==='i'&&!['c27','c27b','recap','tops'].includes(r.id)),oks=results.filter(r=>r.lv==='ok');
-  const tops=results.find(r=>r.id==='tops'),recap=results.find(r=>r.id==='recap');
+  const topsP=results.find(r=>r.id==='tops'),tops=anaSrc==='other'?genTops:topsP,recap=results.find(r=>r.id==='recap');
   const nRes=Object.keys(resolved).length;
   const anaBrandOn=!!(tops&&recapBrand&&tops.brandCols.indexOf(recapBrand)>=0),anaPlOn=!!(tops&&anaPl&&plSet[anaPl]);
   const anaFilterOn=anaBrandOn||anaPlOn;
@@ -4144,10 +4349,11 @@ function PivotVerifier(){
         h('div',{style:{flex:1,minWidth:0,fontSize:'.84rem',fontWeight:800,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',marginLeft:2}},TITLES[tab]),
         (tab==='analyse'&&anaFilterOn)?h('span',{style:{background:'#dc2626',color:'#fff',fontSize:'.6rem',fontWeight:800,borderRadius:4,padding:'1px 6px',letterSpacing:'.04em',flex:'none'}},'FILTRÉ'):null,
         tab==='verif'?h('span',{style:{display:'flex',gap:5,flex:'none'}},
-          h('button',{style:BTN_B,disabled:busy,onClick:()=>run()},'↻ Relancer'),
           h('button',{style:BTN_N,title:'Copier le rapport',onClick:copyReport,disabled:!results.length},'📋'),
-          h('button',{style:BTN_N,onClick:()=>setShowHelp(true)},'❓')):null),
+          h('button',{style:BTN_N,onClick:()=>setShowHelp(true)},'❓')):null,
+        (tab==='verif'||tab==='analyse'||tab==='formules')?h('button',{onClick:refreshAll,disabled:busy&&tab!=='formules','aria-label':'Actualiser les données',title:tab==='formules'?'Relire les colonnes du classeur':'Actualiser les données du classeur',style:{...navBtnS(busy&&tab!=='formules'),marginLeft:2}},IC.refresh()):null),
       (tab==='verif'||tab==='analyse'||tab==='formules')?h(LastActionBar,{onToast:setToast}):null,
+      (stale&&(tab==='verif'||(tab==='analyse'&&anaSrc==='pivot')))?h('div',{style:{display:'flex',alignItems:'center',gap:6,marginTop:4,background:'#fef3c7',border:'1px solid #f59e0b',borderRadius:6,padding:'3px 8px',fontSize:'.72rem',color:'#92400e'}},h('span',{style:{flex:1}},auto?'Le classeur a changé : mise à jour en cours…':'⚠ Le classeur a changé depuis la dernière analyse : ces chiffres peuvent être périmés.'),auto?null:h('button',{style:{...BTN_B,padding:'2px 8px',fontSize:'.7rem'},onClick:()=>run()},'Actualiser')):null,
       (results.length&&tab==='verif')?h('div',{style:{display:'flex',flexWrap:'wrap',gap:5,marginTop:4,alignItems:'center'}},
         chip('🔴 '+bl.length+' bloquant'+(bl.length>1?'s':''),bl.length?'#fee2e2':'#e2e8f0',bl.length?'#b91c1c':'#64748b'),
         chip('🟠 '+vf.length+' à vérifier',vf.length?'#fef3c7':'#e2e8f0',vf.length?'#b45309':'#64748b'),
@@ -4164,7 +4370,7 @@ function PivotVerifier(){
     toast?h('div',{onClick:()=>setToast(''),style:{background:'#eff6ff',border:'1px solid #bfdbfe',color:'#1e40af',borderRadius:8,padding:'.45rem .7rem',fontSize:'.78rem',marginBottom:8,cursor:'pointer'}},toast):null,
 
     h('div',{style:{display:tab==='menu'?'block':'none'}},h(MenuHome,{go})),
-    h('div',{style:{display:tab==='formules'?'block':'none'}},h(FormulasTab,{onToast:setToast})),
+    h('div',{style:{display:tab==='formules'?'block':'none'},onClick:refreshOnClick},h(FormulasTab,{onToast:setToast,active:tab==='formules',refreshHook:fRefresh})),
     h('div',{style:{display:tab==='verif'?'block':'none'}},
     info?h('div',{style:{background:'#fff',border:'1px solid #e2e8f0',borderRadius:9,padding:'.5rem .7rem',marginBottom:10,fontSize:'.77rem'}},
       h('span',null,h('strong',null,info.rows),' lignes dans DATA  '),
@@ -4190,7 +4396,11 @@ function PivotVerifier(){
 
       h(Group,{title:'ℹ️ Informations',accent:'#0369a1',count:infos.length,open:openG.has('i'),onToggle:()=>flip(setOpenG,'i')},infos.map(r=>cardFor(r,'i'))),
       h(Group,{title:'✅ Contrôles OK',accent:'#15803d',count:oks.length,open:openG.has('ok'),onToggle:()=>flip(setOpenG,'ok')},oks.map(r=>cardFor(r,'ok'))))),
-    h('div',{style:{display:tab==='analyse'?'block':'none'},onClick:onClickReport},h(ErrBox,{label:'L\'onglet Analyse'},h(AnalyseMemo,{tops,brand:recapBrand,onBrand:setRecapBrand,onToast:setToast,pl:anaPl,onPl:setAnaPl,sub:anaSub}))),
+    h('div',{style:{display:tab==='analyse'?'block':'none'},onClick:onClickReport},h('div',{style:{display:'flex',gap:6,marginBottom:6}},
+        [['pivot','Pivot (onglet DATA)'],['other','Autre onglet']].map(([k,l])=>h('button',{key:k,onClick:()=>setAnaSrc(k),style:{flex:1,padding:'5px 4px',fontSize:'.74rem',fontWeight:700,cursor:'pointer',borderRadius:6,border:'1px solid '+(anaSrc===k?'#1e293b':'#94a3b8'),background:anaSrc===k?'#1e293b':'#fff',color:anaSrc===k?'#fff':'#1e293b'}},l))),
+      anaSrc==='pivot'&&!topsP&&results.length?h('div',{style:{fontSize:'.74rem',color:'#92400e',background:'#fef3c7',border:'1px solid #f59e0b',borderRadius:6,padding:'4px 8px',marginBottom:6}},'Aucun onglet DATA reconnu : choisissez « Autre onglet » pour analyser un autre fichier.'):null,
+      anaSrc==='other'?h(ErrBox,{label:'La lecture de l\'onglet'},h(GenericSetup,{onBuilt:(t)=>{setGenTops(t);setGenVer(v=>v+1);},hook:genHook,onToast:setToast,built:!!genTops})):null,
+      (anaSrc==='pivot'||genTops)?h(ErrBox,{key:anaSrc+genVer,label:'L\'onglet Analyse'},h(AnalyseMemo,{key:anaSrc+genVer,tops,brand:anaSrc==='other'?'':recapBrand,onBrand:setRecapBrand,onToast:setToast,pl:anaPl,onPl:setAnaPl,sub:anaSub})):null),
     h('div',{style:{display:tab==='outils'?'block':'none'},onClick:onClickReport},h(GuidedTools,{onToast:setToast,regBack:(fn)=>{subBack.current.outils=fn;},onWritten:()=>{if(!(window.__realNames&&window.__realNames.DATA))return;quietRef.current=Date.now()+4000;setTimeout(()=>runRef.current&&runRef.current(undefined,true),600);}})),
     h('div',{style:{display:tab==='maj'?'block':'none'},onClick:onClickReport},h(UpdateTab,{onToast:setToast,regBack:(fn)=>{subBack.current.maj=fn;},onWritten:()=>{if(!(window.__realNames&&window.__realNames.DATA))return;quietRef.current=Date.now()+4000;setTimeout(()=>runRef.current&&runRef.current(undefined,true),600);}})));
 }
