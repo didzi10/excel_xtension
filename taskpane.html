@@ -395,6 +395,7 @@ function aExtra(wb,res){
     const cand=detected.concat(headers.filter(x=>!detSet.has(x.c)));
     const isOn=(cell)=>{if(!cell||cell.v===undefined||cell.v===null||cell.v==='')return false;if(typeof cell.v==='number')return cell.v!==0;const s=String(cell.v).trim().toLowerCase();return !['','0','false','faux','non','no','-'].includes(s);};
     const EQC=g('équivalent média','equivalent media'),DEPC=g('dépenses paid','depenses paid');
+    const RTF=g('rt','is_retweet','isretweet','is retweet'),RTN=g('retweets','retweet count','nb retweets'),QTN=g('quotes','quote count','nb quotes','citations');
     const tN=wb.SheetNames.find(n=>n.toLowerCase()==='tableaux');const b2=tN?cs(wb.Sheets[tN]['B2']):null;
     // colonnes « catégorielles » (≤ 60 valeurs distinctes) utilisables pour définir une période
     const PRI=['scope','semestre','année','annee','mois','plateforme','owned/paid/earned','compte ou requête','compte ou requete'];
@@ -411,16 +412,17 @@ function aExtra(wb,res){
       const p=nP(cs(r.d[PC]))||'(vide)';const o=OEC!==-1?((cs(r.d[OEC])||'').toLowerCase().trim()||'(vide)'):'—';
       const bb=[];cand.forEach((k,i)=>{if(isOn(r.d[k.c]))bb.push(i);});
       const key=p+'|'+o+'|'+bb.join(',');const e2=mp[key]||(mp[key]={p,o,b:bb,n:0,vis:0});e2.n++;
-      const vis=VISC!==-1?cn(r.d[VISC]):null;if(vis!==null)e2.vis+=vis;
+      const isRT=RTF!==-1&&isOn(r.d[RTF]);
+      const vis=(VISC!==-1&&!isRT)?cn(r.d[VISC]):null;if(vis!==null)e2.vis+=vis;
       const so=SOAC!==-1?cn(r.d[SOAC]):null;
-      const eng=SOAC!==-1?(so||0):((LKC!==-1?cn(r.d[LKC])||0:0)+(CMC!==-1?cn(r.d[CMC])||0:0));
+      const eng=isRT?0:SOAC!==-1?(so||0):((LKC!==-1?cn(r.d[LKC])||0:0)+(CMC!==-1?cn(r.d[CMC])||0:0));
       const dcell=DC!==-1?r.d[DC]:null;const d=dcell&&typeof dcell.v==='number'?dcell.v:null;
       const cc=cats.map(k=>{const cell=r.d[k.c];if(!cell||cell.v===undefined||cell.v===null||cell.v==='')return -1;const key=cell.t==='n'?String(cell.v):String(cell.v).trim();const i=k.map.get(key);return i===undefined?-1:i;});
-      items.push({er:r.er,p,o,vis,eng,eq:EQC!==-1?(cn(r.d[EQC])||0):0,dep:DEPC!==-1?(cn(r.d[DEPC])||0):0,d,mk:mkOf(d),acc:CC!==-1?cs(r.d[CC]):null,c:cc,url:UC!==-1?cs(r.d[UC]):null,idp:IDPC!==-1?cs(r.d[IDPC]):null,b:bb});
+      items.push({er:r.er,p,o,vis,eng,eq:(EQC!==-1&&!isRT)?(cn(r.d[EQC])||0):0,rt:isRT,xn:(!isRT&&(p==='twitter'||p==='x'))?((RTN!==-1?cn(r.d[RTN])||0:0)+(QTN!==-1?cn(r.d[QTN])||0:0)):0,dep:DEPC!==-1?(cn(r.d[DEPC])||0):0,d,mk:mkOf(d),acc:CC!==-1?cs(r.d[CC]):null,c:cc,url:UC!==-1?cs(r.d[UC]):null,idp:IDPC!==-1?cs(r.d[IDPC]):null,b:bb});
     }
     const brandCols=cand.map(k=>k.name),brandDetected=detected.map(x=>x.name);
     res.push({sec:'RECAP',id:'recap',st:'i',lb:'Récapitulatif',msg:'',recap:Object.values(mp),brandCols,brandDetected,hasVis:VISC!==-1,rows:[]});
-    res.push({sec:'TOPS',id:'tops',st:'i',lb:'Tops',msg:'',items,brandCols,brandDetected,hasSOA:SOAC!==-1,hasVis:VISC!==-1,hasEq:EQC!==-1,hasDep:DEPC!==-1,hasDate:DC!==-1,cats:cats.map(k=>({name:k.name,values:k.values})),b2,rows:[]});
+    res.push({sec:'TOPS',id:'tops',st:'i',lb:'Tops',msg:'',items,brandCols,brandDetected,hasSOA:SOAC!==-1,hasRT:RTF!==-1,hasXn:RTN!==-1||QTN!==-1,hasVis:VISC!==-1,hasEq:EQC!==-1,hasDep:DEPC!==-1,hasDate:DC!==-1,cats:cats.map(k=>({name:k.name,values:k.values})),b2,rows:[]});
   }
 }
 
@@ -693,15 +695,15 @@ const pctVar=(a,b)=>b?((a-b)/b*100):null;
 const PCOL={a:'#2563eb',b:'#94a3b8',o:'#cbd5e1'};
 
 function agg(rows){
-  const o={n:rows.length,vis:0,eng:0,eq:0,dep:0,byP:{},byO:{}};
+  const o={n:0,vis:0,eng:0,eq:0,dep:0,byP:{},byO:{}};
   for(const x of rows){
-    const v=x.vis||0,en=x.eng||0;o.vis+=v;o.eng+=en;o.eq+=x.eq||0;o.dep+=x.dep||0;
-    const bp=o.byP[x.p]||(o.byP[x.p]={n:0,vis:0,eng:0,dep:0});bp.n++;bp.vis+=v;bp.eng+=en;bp.dep+=x.dep||0;
-    const bo=o.byO[x.o]||(o.byO[x.o]={n:0,vis:0,eng:0,dep:0});bo.n++;bo.vis+=v;bo.eng+=en;bo.dep+=x.dep||0;
+    const v=x.vis||0,en=x.eng||0,w=x.w||1;o.n+=w;o.vis+=v;o.eng+=en;o.eq+=x.eq||0;o.dep+=x.dep||0;
+    const bp=o.byP[x.p]||(o.byP[x.p]={n:0,vis:0,eng:0,dep:0});bp.n+=w;bp.vis+=v;bp.eng+=en;bp.dep+=x.dep||0;
+    const bo=o.byO[x.o]||(o.byO[x.o]={n:0,vis:0,eng:0,dep:0});bo.n+=w;bo.vis+=v;bo.eng+=en;bo.dep+=x.dep||0;
   }
   return o;
 }
-const metricVal=(x,k)=>k==='n'?1:(x[k]||0);
+const metricVal=(x,k)=>k==='n'?(x.w||1):(x[k]||0);
 function monthSeries(rows,k){
   const m={};for(const x of rows){if(!x.mk)continue;m[x.mk]=(m[x.mk]||0)+metricVal(x,k);}
   return Object.keys(m).sort().map(mk=>({mk,v:m[mk]}));
@@ -961,6 +963,8 @@ function AnalyseTab(p){
   const [metT,setMetT]=useState('v');
   const [plT,setPlT]=useState('');
   const [editP,setEditP]=useState(false);
+  const [cRT,setCRTs]=useState(!!prefGet('anaRT',false));
+  const setCRT=(v)=>{setCRTs(v);prefSet('anaRT',v);};
   const [anaOpen,setAnaOpen]=useState(new Set());
   const inited=useRef(false);
   useEffect(()=>{if(inited.current)prefSet('ana',{mode,col,va,vb,da1,da2,db1,db2,metric});},[mode,col,va,vb,da1,da2,db1,db2,metric]);
@@ -981,7 +985,8 @@ function AnalyseTab(p){
 
   const bi=brand?tops.brandCols.indexOf(brand):-1,on=bi>=0;
   const plOn=!!pl&&tops.items.some(x=>x.p===pl);
-  const itemsP=plOn?tops.items.filter(x=>x.p===pl):tops.items;
+  const itemsP0=plOn?tops.items.filter(x=>x.p===pl):tops.items;
+  const itemsP=useMemo(()=>cRT?itemsP0.map(x=>x.xn?Object.assign({},x,{w:1+x.xn}):x):itemsP0,[itemsP0,cRT]);
   const baseAll=on?tops.items.filter(x=>x.b.includes(bi)):tops.items;
   const base=on?itemsP.filter(x=>x.b.includes(bi)):itemsP;
   const gAll=grpBy(tops.items,x=>[x.p]);
@@ -1064,6 +1069,8 @@ function AnalyseTab(p){
       h('div',{style:{flex:1,minWidth:0,fontSize:'.76rem',color:'#334155',lineHeight:1.45}},'Période : ',h('strong',null,labA),hasB?[' · comparée à ',h('strong',{key:'b'},labB)]:' · sans comparaison',' — '+fI(A.n)+' posts'+(hasB?' / '+fI(B.n):'')),
       h('button',{style:BTN_N,onClick:()=>setEditP(!editP)},editP?'Fermer':'Modifier'),
       h('button',{style:BTN_B,onClick:doExport,title:'Crée une nouvelle feuille avec tous les tableaux de cet onglet'},'📤')),
+    tops.hasXn?h('label',{style:{display:'flex',alignItems:'flex-start',gap:6,marginTop:6,fontSize:'.74rem',color:'#334155',lineHeight:1.4,cursor:'pointer'}},h('input',{type:'checkbox',checked:cRT,onChange:e=>setCRT(e.target.checked),style:{marginTop:2}}),h('span',null,'Compter les retweets et quotes générés sur les tweets comme des contenus',cRT?h('strong',{style:{color:'#b91c1c'}},' (activé)'):null)):null,
+    tops.hasRT?h('div',{style:{marginTop:4,fontSize:'.68rem',color:'#64748b'}},'Les lignes marquées retweet (RT / is_retweet) comptent comme posts, mais leurs engagements, visibilité et EMV sont toujours ignorés.'):null,
     editP?h('div',{style:{marginTop:8,borderTop:'1px solid #e2e8f0',paddingTop:8}},
       h('div',{style:{fontSize:'.72rem',color:'#64748b',marginBottom:8,lineHeight:1.5}},'Choisissez la période (colonne ou dates), puis une période de comparaison si besoin. Les filtres plateforme et marque s\'appliquent à tout l\'onglet.'),
       h('div',{style:{display:'flex',gap:6,marginBottom:8}},modeBtn('col','Par colonne'),modeBtn('date','Par dates')),
@@ -1221,7 +1228,7 @@ const dPt=(a,b)=>{const d=a-b;return (d>=0?'▲ ':'▼ ')+fP(Math.abs(d),1)+' pt
 const fmtCell=(c,v)=>(v===null||v===undefined||v===''||(typeof v==='number'&&!isFinite(v)))?'—':c==='i'?fI(v):c==='p'?fP(v,1)+' %':c==='q'?fP(v,2)+' %':c==='c'?fP(v,2):c==='f'?fP(v,1):String(v);
 const fmtOf=(t,ri,j)=>t.byRow?(j===0?'s':t.fmts[ri]):t.fmts[j];
 const tsv=(t)=>[t.heads].concat(t.rows.map((r,ri)=>r.map((v,j)=>fmtCell(fmtOf(t,ri,j),v)))).map(r=>r.join('\t')).join('\n');
-const grpBy=(rows,kf)=>{const m={};for(const x of rows){for(const k of kf(x)){const g=m[k]||(m[k]={n:0,vis:0,eng:0,eq:0,dep:0});g.n++;g.vis+=x.vis||0;g.eng+=x.eng||0;g.eq+=x.eq||0;g.dep+=x.dep||0;}}return m;};
+const grpBy=(rows,kf)=>{const m={};for(const x of rows){for(const k of kf(x)){const g=m[k]||(m[k]={n:0,vis:0,eng:0,eq:0,dep:0});g.n+=x.w||1;g.vis+=x.vis||0;g.eng+=x.eng||0;g.eq+=x.eq||0;g.dep+=x.dep||0;}}return m;};
 const dateFr=(s)=>serialToDate(s).toLocaleDateString('fr-FR',{timeZone:'UTC'});
 
 function tSplit(title,mapA,mapB,A,B){
@@ -1310,7 +1317,7 @@ function tRhythm(rowsA){
 }
 function tAccounts(base,rowsA){
   const dated=base.filter(x=>x.d!==null);const maxD=dated.length?Math.max(...dated.map(x=>x.d)):null;
-  const by={};for(const x of rowsA){if(!x.acc)continue;const k=x.p+' · '+x.acc;const g=by[k]||(by[k]={n:0,vis:0,eng:0,last:null,acc:x.acc});g.n++;g.vis+=x.vis||0;g.eng+=x.eng||0;if(x.d!==null&&(g.last===null||x.d>g.last))g.last=x.d;}
+  const by={};for(const x of rowsA){if(!x.acc)continue;const k=x.p+' · '+x.acc;const g=by[k]||(by[k]={n:0,vis:0,eng:0,last:null,acc:x.acc});g.n+=x.w||1;g.vis+=x.vis||0;g.eng+=x.eng||0;if(x.d!==null&&(g.last===null||x.d>g.last))g.last=x.d;}
   const ks=Object.keys(by);if(!ks.length)return null;
   ks.sort((a,b)=>by[b].vis-by[a].vis);
   const rows=ks.slice(0,30).map(k=>{const g=by[k];return [k,g.n,g.vis,g.vis?g.eng/g.vis*100:null,g.last===null?'—':dateFr(g.last),(maxD!==null&&g.last!==null&&g.last<maxD-60)?'inactif (> 60 j)':''];});
