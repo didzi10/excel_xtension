@@ -1077,8 +1077,7 @@ function AnalyseTab(p){
       h('button',{style:BTN_B,onClick:doExport,title:'Crée une nouvelle feuille avec tous les tableaux de cet onglet'},'📤')),
     (tops.emvCols&&tops.emvCols.length>1)?h('div',{style:{marginTop:6,background:tops.emvSel?'#f1f5f9':'#fef3c7',border:'1px solid '+(tops.emvSel?'#cbd5e1':'#f59e0b'),borderRadius:6,padding:'5px 8px',fontSize:'.74rem',color:tops.emvSel?'#334155':'#92400e'}},
       h('div',{style:{marginBottom:3}},tops.emvSel?'Colonne EMV utilisée (modifiable) :':'Plusieurs colonnes EMV détectées (brut, net…) : choisissez celle à utiliser pour l\'analyse.'),
-      h('select',{value:tops.emvSel?String(tops.emvCols.findIndex(x=>x.name===tops.emvSel.name&&x.letter===tops.emvSel.letter)):'',onChange:e=>{const i=e.target.value;if(i!==''&&onEmv)onEmv(tops.emvCols[+i]);},style:{width:'100%',fontSize:'.74rem',padding:'3px'}},
-        h('option',{value:''},'— choisir —'),tops.emvCols.map((x,i)=>h('option',{key:i,value:String(i)},'['+x.letter+'] '+x.name)))):null,
+      h(Picker,{full:true,value:tops.emvSel?String(tops.emvCols.findIndex(x=>x.name===tops.emvSel.name&&x.letter===tops.emvSel.letter)):'',onChange:(v)=>{if(v!==''&&onEmv)onEmv(tops.emvCols[+v]);},options:[{value:'',label:'— choisir —'}].concat(tops.emvCols.map((x,i)=>({value:String(i),label:'['+x.letter+'] '+x.name})))})):null,
     tops.hasXn?h('label',{style:{display:'flex',alignItems:'flex-start',gap:6,marginTop:6,fontSize:'.74rem',color:'#334155',lineHeight:1.4,cursor:'pointer'}},h('input',{type:'checkbox',checked:cRT,onChange:e=>setCRT(e.target.checked),style:{marginTop:2}}),h('span',null,'Compter les retweets, quotes et replies (commentaires) générés sur les tweets comme des contenus',cRT?h('strong',{style:{color:'#b91c1c'}},' (activé)'):null)):null,
     tops.hasRT?h('div',{style:{marginTop:4,fontSize:'.68rem',color:'#64748b'}},'Les lignes marquées retweet (RT / is_retweet) comptent comme posts, mais leurs engagements, visibilité et EMV sont toujours ignorés.'):null,
     editP?h('div',{style:{marginTop:8,borderTop:'1px solid #e2e8f0',paddingTop:8}},
@@ -2438,6 +2437,7 @@ async function loadGenericForUpdate(scope,gi,map){
         if(!id&&url)id=idOnly(url)||'';
         if(!id&&!url&&g.platform==null)continue;                           // ligne vide
         let plat=g.platform!=null?normPlatCell(g.platform):'';
+        if(!plat&&map.platFixed)plat=map.platFixed;
         if(!plat){const pu=platOfUrl(url||(g.id!=null&&/^https?:/i.test(String(g.id))?String(g.id):''));plat=['facebook','instagram','twitter','youtube','tiktok'].indexOf(pu)>=0?pu:'';}
         if(!plat)unknown++;
         const o={row:r0+i+1,_plat:plat,_id:id||null,_url:url||null,_eng:g.engagement,_vis:g.visibility};
@@ -2917,7 +2917,9 @@ function UpdateTab(p){
         h('div',{style:{display:'grid',gridTemplateColumns:'auto 1fr',gap:'4px 8px',alignItems:'center',fontSize:'.74rem'}},
           GEN_FIELDS.map(([k,label])=>[
             h('span',{key:'l'+k,style:{color:'#334155'}},label),
-            h(Picker,{key:'p'+k,value:target.gmap[k]==null?'':String(target.gmap[k]),onChange:(v)=>setMapField(k,v),options:[{value:'',label:'— aucune —'}].concat(target.cols.map(x=>({value:String(x.c),label:x.letter+' · '+x.name})))})]))):null,
+            h(Picker,{key:'p'+k,value:target.gmap[k]==null?'':String(target.gmap[k]),onChange:(v)=>setMapField(k,v),options:[{value:'',label:'— aucune —'}].concat(target.cols.map(x=>({value:String(x.c),label:x.letter+' · '+x.name})))})]).concat(target.gmap.platform==null?[
+            h('span',{key:'lpf',style:{color:'#334155'}},'Une seule plateforme dans le fichier'),
+            h(Picker,{key:'ppf',value:target.gmap.platFixed||'',onChange:(v)=>setTarget({...target,gmap:{...target.gmap,platFixed:v||null}}),options:[{value:'',label:'— déduite de l\'URL —'}].concat(['instagram','facebook','twitter','youtube','tiktok'].map(k=>({value:k,label:plName(k)})))})]:[]))):null,
       h('details',{style:{...box,padding:'.5rem .8rem'}},
         h('summary',{style:{cursor:'pointer',fontWeight:700,fontSize:'.8rem'}},'Options avancées'),
         h('div',{style:{marginTop:8,fontSize:'.75rem'}},
@@ -3246,7 +3248,7 @@ async function planProfile(sel,o){   // o.kind : 'clean' | 'user'
 /* ── Doublons de comptes : clé = (plateforme, username) ── */
 const DUP_RE=/^doublon de la ligne \d+$/;
 const DUP_HEAD='Doublon de compte';
-function dedupPlan(rows,scopeSet,markC){
+function dedupPlan(rows,scopeSet,markC,fixedPl){
   const seen=new Map(),ch=[],bad=[],byPl={};let dup=0,unchanged=0,usedMark=0,formulaMark=0,scanned=0;const grp=new Set();
   const reasons={};
   for(const x of rows){
@@ -3256,6 +3258,7 @@ function dedupPlan(rows,scopeSet,markC){
     const raw=String(x.key).trim();
     let pl='',user=null;
     if(x.plat!==null&&x.plat!==undefined&&String(x.plat).trim()!=='')pl=normPlatCell(x.plat)||normHdr(x.plat);
+    if(!pl&&fixedPl)pl=fixedPl;
     if(isUrlish(raw)){const e=extractUser(raw);if(e.st==='ok'){user=e.user;if(!pl)pl=e.pl;}else if(!pl&&e.pl!=='inconnue')pl=e.pl;}
     else user=raw.replace(/^@/,'');
     if(!pl||!user){bad.push({r:x.r,v:raw});const w=!pl?'plateforme inconnue':'compte non déterminable';reasons[w]=(reasons[w]||0)+1;continue;}
@@ -3313,7 +3316,7 @@ async function planDedup(o){
   const newMark=o.markC==null;
   const markC=newMark?d.newCol:o.markC;
   if(markC===o.keyC||markC===o.platC)throw new Error('La colonne de marquage doit être différente de la colonne comparée.');
-  const r=dedupPlan(d.rows,scopeSet,markC);
+  const r=dedupPlan(d.rows,scopeSet,markC,o.platFixed||null);
   const changes=r.changes;
   if(newMark&&changes.length)changes.unshift({r:gi.headerRow,c:markC,v:DUP_HEAD,fmt:null,expect:'empty',before:'',label:'(en-tête)',showBefore:'nouvelle colonne'});
   const ign={};
@@ -3410,7 +3413,7 @@ function GuidedTools(p){
       if(tool==='dedup'){
         if(!dd||dd.keyC==null)throw new Error('Choisissez la colonne à comparer.');
         setProg('Lecture des lignes…');await new Promise(r=>setTimeout(r,20));
-        setPlan(await planDedup({gi:dd.gi,keyC:dd.keyC,platC:dd.platC,markC:dd.markC,scope:ddScope}));setStep('review');setBusy('');setProg('');return;
+        setPlan(await planDedup({gi:dd.gi,keyC:dd.keyC,platC:dd.platC,markC:dd.markC,scope:ddScope,platFixed:dd.platFixed||null}));setStep('review');setBusy('');setProg('');return;
       }
       const sel=await readScoped(scope,tool==='dates');
       if(!sel.cells.length)throw new Error(scope==='visible'?'Sélectionnez d\'abord des cellules (non vides) dans Excel.':'Aucune cellule non vide dans ce périmètre.');
@@ -3470,6 +3473,7 @@ function GuidedTools(p){
         h('div',{style:rowS},h('span',{style:{width:128,color:'#64748b'}},'Colonne comparée'),h(Picker,{value:dd&&dd.keyC!=null?String(dd.keyC):'',onChange:(v)=>setDdField('keyC',v),options:[{value:'',label:'— choisir —'}].concat(opts)})),
         h('div',{style:{fontSize:'.7rem',color:'#64748b',margin:'-2px 0 6px 134px'}},'URL de profil (ou de post) ou username.'),
         h('div',{style:rowS},h('span',{style:{width:128,color:'#64748b'}},'Colonne plateforme'),h(Picker,{value:dd&&dd.platC!=null?String(dd.platC):'',onChange:(v)=>setDdField('platC',v),options:[{value:'',label:'— la déduire de l\'URL —'}].concat(opts)})),
+        (dd&&dd.platC==null)?h('div',{style:rowS},h('span',{style:{width:128,color:'#64748b'}},'Une seule plateforme'),h(Picker,{value:dd.platFixed||'',onChange:(v)=>setDd({...dd,platFixed:v||null}),options:[{value:'',label:'— déduite de l\'URL —'}].concat(PLAT_OPTS.map(([k,l])=>({value:k,label:l})))})):null,
         h('div',{style:{fontSize:'.7rem',color:'#64748b',margin:'-2px 0 6px 134px'}},'Nécessaire si la colonne comparée contient des usernames sans URL.'),
         h('div',{style:rowS},h('span',{style:{width:128,color:'#64748b'}},'Marquer dans'),h(Picker,{value:dd&&dd.markC!=null?String(dd.markC):'',onChange:(v)=>setDdField('markC',v),options:[{value:'',label:'— nouvelle colonne à la suite —'}].concat(opts)})),
         h('div',{style:{fontWeight:700,fontSize:'.8rem',margin:'10px 0 6px'}},'Quelles lignes comparer ?'),
@@ -3632,7 +3636,7 @@ function Group(p){
 }
 
 function Picker(p){
-  const {value,onChange,options,warn,placeholder}=p;
+  const {value,onChange,options,warn,placeholder,full}=p;
   const [open,setOpen]=useState(false);
   const [q,setQ]=useState('');
   const cur=options.find(o=>o.value===value);
@@ -3644,8 +3648,8 @@ function Picker(p){
     const sel=o.value===value;
     items.push(h('div',{key:'o'+i,onClick:()=>{onChange(o.value);setOpen(false);setQ('');},style:{padding:'4px 8px',fontSize:'.76rem',cursor:'pointer',borderRadius:5,background:sel?'#dbeafe':'transparent',fontWeight:sel?700:400,color:'#1e293b'}},o.label));
   });
-  return h('div',{style:{display:'inline-block',maxWidth:'100%',verticalAlign:'top'}},
-    h('button',{onClick:()=>setOpen(!open),style:{padding:'3px 8px',background:'#fff',border:'1px solid '+(warn?'#dc2626':'#cbd5e1'),color:warn?'#dc2626':'#334155',fontWeight:warn?700:500,borderRadius:6,fontSize:'.74rem',cursor:'pointer',textAlign:'left',maxWidth:230,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},(cur?cur.label:(placeholder||'—'))+' ▾'),
+  return h('div',{style:full?{display:'block',width:'100%'}:{display:'inline-block',maxWidth:'100%',verticalAlign:'top'}},
+    h('button',{onClick:()=>setOpen(!open),style:{...(full?{width:'100%',maxWidth:'none',display:'block'}:{}),padding:'3px 8px',background:'#fff',border:'1px solid '+(warn?'#dc2626':'#cbd5e1'),color:warn?'#dc2626':'#334155',fontWeight:warn?700:500,borderRadius:6,fontSize:'.74rem',cursor:'pointer',textAlign:'left',maxWidth:230,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},(cur?cur.label:(placeholder||'—'))+' ▾'),
     open?h('div',{style:{marginTop:3,background:'#fff',border:'1px solid #cbd5e1',borderRadius:8,padding:4,maxHeight:220,overflowY:'auto',minWidth:200}},
       options.length>8?h('input',{value:q,onChange:ev=>setQ(ev.target.value),placeholder:'Rechercher…',style:{width:'100%',fontSize:'.74rem',padding:'3px 6px',marginBottom:4,border:'1px solid #cbd5e1',borderRadius:6}}):null,
       items.length?items:h('div',{style:{padding:'4px 8px',fontSize:'.74rem',color:'#94a3b8'}},'Aucun résultat')):null);
@@ -4011,6 +4015,7 @@ function FormulasTab(p){
 
 const navBtnS=(off)=>({width:28,height:28,border:0,borderRadius:6,background:'rgba(255,255,255,.14)',color:'#fff',display:'flex',alignItems:'center',justifyContent:'center',flex:'none',cursor:off?'default':'pointer',opacity:off?.35:1});
 /* ═════════ Analyse hors pivot : lecture d'un onglet quelconque ═════════ */
+const PLAT_OPTS=[['instagram','Instagram'],['facebook','Facebook'],['twitter','Twitter/X'],['youtube','YouTube'],['linkedin','LinkedIn'],['tiktok','TikTok'],['twitch','Twitch'],['strava','Strava'],['snapchat','Snapchat'],['story','Story'],['websites','Websites']];
 const gNorm=(s)=>String(s==null?'':s).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').trim();
 const G_PL=[[/insta|^ig$/,'instagram'],[/^fb$|facebook/,'facebook'],[/twitter|^x$|tweet/,'twitter'],[/youtube|^yt$/,'youtube'],[/linkedin|^li$/,'linkedin'],[/tiktok|^tt$/,'tiktok'],[/twitch/,'twitch'],[/strava/,'strava'],[/snap/,'snapchat'],[/stor(y|ies)/,'story'],[/web|site|press/,'websites']];
 const gPlat=(v)=>{const s=gNorm(v);if(!s)return '';for(const [re,k] of G_PL)if(re.test(s))return k;return s;};
@@ -4069,7 +4074,7 @@ async function gBuild(info,map,onProg){
         const row=V[i];let any=false;for(let j=0;j<row.length;j++){if(row[j]!==''&&row[j]!==null){any=true;break;}}
         if(!any)continue;
         const val=(c)=>c==null?'':row[c-c0];
-        let p=map.plat!=null?gPlat(val(map.plat)):'';if(!p&&map.url!=null)p=gPlatUrl(val(map.url));if(!p)p='(vide)';
+        let p=map.plat!=null?gPlat(val(map.plat)):'';if(!p&&map.platFixed)p=map.platFixed;if(!p&&map.url!=null)p=gPlatUrl(val(map.url));if(!p)p='(vide)';
         const vis=map.vis!=null?gNum(val(map.vis)):null;
         let eng=0;if(map.engMode==='total'&&map.engTotal!=null)eng=gNum(val(map.engTotal))||0;else for(const c of parts)eng+=gNum(val(c))||0;
         const d=map.date!=null?gDate(val(map.date)):null;
@@ -4127,19 +4132,20 @@ function GenericSetup(p){
     h('div',{style:{flex:1,minWidth:0,color:'#334155'}},'Onglet analysé : ',h('strong',null,sum.sheet),' · '+fI(sum.n)+' lignes'),
     h('button',{style:BTN_N,onClick:()=>setOpen(true)},'Modifier'));
   const set=(k,v)=>setMap(m=>({...m,[k]:v}));
-  const sel=(val,on,ph)=>h('select',{value:val==null?'':String(val),onChange:e=>on(e.target.value===''?null:Number(e.target.value)),style:{width:'100%',fontSize:'.74rem',padding:'3px',minWidth:0}},
-    h('option',{value:''},ph||'— aucune —'),info.cols.map(o=>h('option',{key:o.c,value:String(o.c)},'['+o.letter+'] '+o.name)));
+  const sel=(val,on,ph)=>h(Picker,{full:true,value:val==null?'':String(val),onChange:(v)=>on(v===''?null:Number(v)),options:[{value:'',label:ph||'— aucune —'}].concat(info.cols.map(o=>({value:String(o.c),label:'['+o.letter+'] '+o.name})))});
   const row=(lb,ctl,hint)=>h('div',{style:{display:'flex',alignItems:'center',gap:6,marginBottom:5}},h('div',{style:{width:104,flex:'none',color:'#475569',fontWeight:600}},lb),h('div',{style:{flex:1,minWidth:0}},ctl),hint||null);
   const noVis=map&&map.vis==null,noEng=map&&((map.engMode==='total'&&map.engTotal==null)||(map.engMode==='sum'&&!(map.engParts||[]).length));
   return h('div',{style:box},
     h('div',{style:{fontWeight:800,marginBottom:6,color:'#1e293b'}},'Analyser un autre onglet'),
     err?h('div',{style:{color:'#b91c1c',marginBottom:6}},err):null,
     !info?h('div',{style:{color:'#64748b'}},'Lecture de l\'onglet…'):h('div',null,
-      row('Onglet',h('select',{value:info.sheet,onChange:e=>load(e.target.value,null),style:{width:'100%',fontSize:'.74rem',padding:'3px'}},info.sheets.map(s=>h('option',{key:s,value:s},s)))),
+      row('Onglet',h(Picker,{full:true,value:info.sheet,onChange:(v)=>load(v,null),options:info.sheets.map(x=>({value:x,label:x}))})),
       row('Ligne d\'en-têtes',h('span',null,h('input',{type:'number',min:1,value:hrow,onChange:e=>setHrow(e.target.value),style:{width:60,fontSize:'.74rem'}}),' ',h('button',{style:{...BTN_N,padding:'2px 8px'},onClick:()=>load(info.sheet,Number(hrow)||null)},'Relire'))),
       map?h('div',null,
         h('div',{style:{fontSize:'.68rem',color:'#64748b',margin:'4px 0 6px'}},'Colonnes reconnues automatiquement : corrigez si besoin.'),
-        row('Plateforme',sel(map.plat,(v)=>set('plat',v)),null),
+        row('Plateforme',sel(map.plat,(v)=>set('plat',v),'— aucune colonne —'),null),
+        map.plat==null?row('Plateforme unique',h(Picker,{full:true,value:map.platFixed||'',onChange:(v)=>set('platFixed',v||null),options:[{value:'',label:'— déduite de l\'URL —'}].concat(PLAT_OPTS.map(([k,l])=>({value:k,label:l})))})):null,
+        (map.plat==null&&!map.platFixed&&map.url==null)?h('div',{style:{background:'#fef3c7',border:'1px solid #f59e0b',borderRadius:6,padding:'4px 8px',marginBottom:6,color:'#92400e'}},'Ni colonne plateforme ni URL : si le fichier ne contient qu\'une seule plateforme, indiquez-la ci-dessus.'):null,
         row('URL du post',sel(map.url,(v)=>set('url',v))),
         row('Date',sel(map.date,(v)=>set('date',v))),
         row('Compte',sel(map.acc,(v)=>set('acc',v))),
