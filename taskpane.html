@@ -186,9 +186,12 @@ function aData(ws,cWs,res){
   const stR=rows.filter(r=>isP(cs(r.d[PC]),'story'));
   if(stR.length){
     const followerCols=[];for(let c=m._mnC;c<=m._mxC;c++){const h=m['_h'+c];if(h&&h.toLowerCase().includes('followers'))followerCols.push(c);}
-    const mf=stR.filter(r=>followerCols.length===0||!followerCols.some(c=>cn(r.d[c])!==null));
+    /* story « owned » avec impressions renseignées : les followers ne sont pas nécessaires */
+    const exStory=(r)=>OEC!==-1&&VISC!==-1&&(cs(r.d[OEC])||'').toLowerCase().trim()==='owned'&&cn(r.d[VISC])!==null;
+    const nEx=stR.filter(exStory).length;
+    const mf=stR.filter(r=>!exStory(r)&&(followerCols.length===0||!followerCols.some(c=>cn(r.d[c])!==null)));
     const colNames=followerCols.map(c=>m['_h'+c]).join(', ')||'(aucune colonne "followers" trouvée)';
-    mf.length?pp(res,'DATA','c15','w','Story — Followers manquants',`Followers manquants pour les posts story — ${mf.length} ligne${mf.length>1?'s':''} sans valeur numérique dans les colonnes followers détectées (${colNames}) — lignes : ${fL(mf.map(r=>r.er))}`):pp(res,'DATA','c15','ok','Story — Followers complets',`Tous les posts story ont des followers renseignés (colonnes : ${colNames}).`);
+    mf.length?pp(res,'DATA','c15','w','Story — Followers manquants',`Followers manquants pour les posts story — ${mf.length} ligne${mf.length>1?'s':''} sans valeur numérique dans les colonnes followers détectées (${colNames}) — lignes : ${fL(mf.map(r=>r.er))}`+(nEx?` (${nEx} ${nEx>1?'stories':'story'} owned avec impressions ${nEx>1?'ignorées':'ignorée'}).`:'')):pp(res,'DATA','c15','ok','Story — Followers complets',`Tous les posts story concernés ont des followers renseignés (colonnes : ${colNames}).`+(nEx?` ${nEx} ${nEx>1?'stories':'story'} owned avec impressions ${nEx>1?'sont':'est'} dispensée${nEx>1?'s':''} de followers.`:''));
   } else pp(res,'DATA','c15','i','Story — aucune ligne','Aucune ligne "story".');
 
   if(OEC!==-1){const pR=rows.filter(r=>{const v=cs(r.d[OEC]);return v&&v.toLowerCase().trim()==='paid';});if(pR.length){if(DEPC===-1)pp(res,'DATA','c16','w','Paid — "dépenses paid" introuvable','Colonne "dépenses paid" non trouvée.');else{const md=pR.filter(r=>cn(r.d[DEPC])===null);if(md.length){const g=gBP(md,PC);pp(res,'DATA','c16','w','Paid — Dépenses non indiquées',`Dépenses paid non indiquées pour ${md.length} ligne${md.length>1?'s':''} :<br>${fG(g)}`);}else pp(res,'DATA','c16','ok','Paid — Dépenses complètes','Toutes les lignes "paid" ont des dépenses renseignées.');}}else pp(res,'DATA','c16','i','Paid — aucune ligne "paid"','Aucune ligne avec owned/paid/earned = "paid".');}
@@ -636,7 +639,10 @@ async function fixFollowers(ctx){
   const fcols=Object.keys(d.cols).filter(k=>k.includes('followers')).map(k=>d.cols[k]);
   if(!fcols.length)return {count:0,note:'Aucune colonne followers trouvée.'};
   const pv=(await readCol(ctx,d,pc,false)).v;
-  const isStory=(i)=>String(pv[i]).trim().toLowerCase()==='story';
+  const oc=dcol(d,'owned/paid/earned','owned_paid_earned'),vc=dcol(d,'visibilité','visibilite');
+  const ov=oc!==-1?(await readCol(ctx,d,oc,false)).v:null,vv=vc!==-1?(await readCol(ctx,d,vc,false)).v:null;
+  const exempt=(i)=>!!ov&&!!vv&&String(ov[i]).trim().toLowerCase()==='owned'&&typeof vv[i]==='number';
+  const isStory=(i)=>String(pv[i]).trim().toLowerCase()==='story'&&!exempt(i);
   const cols=[];for(const c of fcols)cols.push({c,x:await readCol(ctx,d,c,true)});
   const withF=cols.filter(k=>k.x.f.some(isFormula));
   if(withF.length!==1)return {count:0,note:withF.length?'Plusieurs colonnes followers contiennent des formules : étendez-les à la main.':'Aucune formule followers trouvée à copier.'};
@@ -2835,7 +2841,8 @@ function UpdateTab(p){
       try{await appendLog(plan.sheet,lot,collect,plan.hdr,meta);}catch(e){logErr=msg(e);}
       setDone({sheet:plan.sheet,firstRow:plan.firstRow,rows:plan.counts.rowsTouched,cells:r.n,skipped:r.skipped,logErr,
         updated:L.filter(l=>l.status==='mis_a_jour'||l.status==='mis_a_jour_avec_baisse').map(l=>l.row),
-        notFound:L.filter(l=>l.status==='non_trouve').map(l=>l.row)});
+        notFound:L.filter(l=>l.status==='non_trouve').map(l=>l.row),
+        drops:L.filter(l=>l.flags.some(f=>f.indexOf('baisse_')===0)).map(l=>l.row)});
       setStep('done');refreshLast();onWritten&&onWritten();
     }catch(e){setErr(msg(e));}
     setBusy('');setProg('');
@@ -2978,7 +2985,14 @@ function UpdateTab(p){
             h('td',{style:td},l.platform),
             h('td',{style:td},Object.entries(l.changes).filter(([m,c])=>c.kind!=='drop').map(([m,c])=>m+' '+(c.old===null?'—':fr(c.old))+' → '+fr(c.new)).join(' · ')))))),
           changed.length>10?h('div',{style:{fontSize:'.7rem',color:'#94a3b8'}},'… et '+(changed.length-10)+' autres'):null):null,
-        drops.length?h('div',{style:{fontSize:'.74rem',color:'#92400e',marginBottom:6}},h('strong',null,'Baisses ignorées : '),'lignes ',rowLinks(plan.sheet,drops.map(l=>l.row)),copyRows(drops.map(l=>l.row))):null,
+        drops.length?h('div',{style:{marginBottom:6}},
+          h('div',{style:{fontSize:'.74rem',color:'#92400e'}},h('strong',null,'Baisses ignorées (valeur de l\'export plus basse, ancienne valeur conservée) : '),'lignes ',rowLinks(plan.sheet,drops.map(l=>l.row)),copyRows(drops.map(l=>l.row))),
+          h('div',{style:{overflowX:'auto',margin:'6px 0'}},h('table',{style:{width:'100%',borderCollapse:'collapse'}},h('tbody',null,
+            drops.slice(0,15).map((l,i)=>h('tr',{key:'d'+i},
+              h('td',{style:{...td,color:'#94a3b8'}},h('span',{className:'rl',onClick:()=>selectDataRow(plan.sheet,l.row)},l.row)),
+              h('td',{style:td},l.platform),
+              h('td',{style:td},Object.entries(l.changes).filter(([m,c])=>c.kind==='drop').map(([m,c])=>m+' : fichier '+(c.old===null?'—':fr(c.old))+', export '+fr(c.incoming)+' (non appliqué)').join(' · ')))))),
+            drops.length>15?h('div',{style:{fontSize:'.7rem',color:'#94a3b8'}},'… et '+(drops.length-15)+' autres'):null)):null,
         notFound.length?h('div',{style:{fontSize:'.74rem',color:'#9a3412',marginBottom:6}},h('strong',null,'Non retrouvées : '),'lignes ',rowLinks(plan.sheet,notFound.map(l=>l.row)),copyRows(notFound.map(l=>l.row))):null,
         (S.doublonsPivot||S.doublonsExport)?h('div',{style:{fontSize:'.72rem',color:'#475569'}},(S.doublonsPivot?S.doublonsPivot+' ligne(s) du fichier partagent un même ID (toutes mises à jour). ':'')+(S.doublonsExport?S.doublonsExport+' publication(s) présente(s) plusieurs fois dans les exports (valeur la plus haute retenue).':'')):null,
         L.some(l=>l.flags.includes('retweet'))?h('div',{style:{fontSize:'.72rem',color:'#64748b',marginTop:4}},'Retweets X : les chiffres sont ceux du tweet d\'origine (comportement d\'Apify).'):null):null,
@@ -3000,6 +3014,7 @@ function UpdateTab(p){
       h('div',{style:box},
         h('div',{style:{display:'flex',flexDirection:'column',gap:6}},
           d.updated.length?h('button',{style:{...BTN_B,...big},disabled:!!busy,onClick:async()=>{try{const n=await showOnlyRows(d.sheet,d.firstRow,d.updated);onToast(n+' ligne'+pl(n,'')+' affichée'+pl(n,'')+' (les autres sont masquées).');}catch(e){setErr(msg(e));}}},'👁 Voir les lignes mises à jour'):null,
+          (d.drops&&d.drops.length)?h('button',{style:{...BTN_N,...big},disabled:!!busy,onClick:async()=>{try{const n=await showOnlyRows(d.sheet,d.firstRow,d.drops);onToast(n+' ligne'+pl(n,'')+' avec baisse ignorée affichée'+pl(n,'')+'.');}catch(e){setErr(msg(e));}}},'⚠️ Voir les lignes avec baisse ignorée ('+fr(d.drops.length)+')'):null,
           d.notFound.length?h('button',{style:{...BTN_N,...big},disabled:!!busy,onClick:async()=>{try{const n=await showOnlyRows(d.sheet,d.firstRow,d.notFound);onToast(n+' ligne'+pl(n,'')+' non retrouvée'+pl(n,'')+' affichée'+pl(n,'')+'.');}catch(e){setErr(msg(e));}}},'❓ Voir les lignes non retrouvées'):null,
           h('button',{style:{...BTN_N,...big},disabled:!!busy,onClick:async()=>{try{await showAllRows(d.sheet,d.firstRow);onToast('Toutes les lignes sont de nouveau affichées.');}catch(e){setErr(msg(e));}}},'Tout réafficher'),
           last&&last.lot?h('button',{style:undoArmed?{...BTN_F,...big}:{...BTN_N,...big},disabled:!!busy,onClick:undo},undoArmed?'⚠️ Confirmer l\'annulation':'↩️ Annuler cette mise à jour'):null,
